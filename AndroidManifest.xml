@@ -18,8 +18,8 @@
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.android.captiveportallogin"
-    android:versionCode="291900400"
-    android:versionName="q_pr1-release_aml_291900400">
+    android:versionCode="291900500"
+    android:versionName="q_pr1-release_aml_291900500">
 
     <uses-sdk android:minSdkVersion="29" android:targetSdkVersion="29" />
     <uses-permission android:name="android.permission.INTERNET" />
