@@ -17,6 +17,8 @@
 package com.android.captiveportallogin;
 
 import static android.net.ConnectivityManager.EXTRA_CAPTIVE_PORTAL_PROBE_SPEC;
+import static android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED;
+import static android.provider.DeviceConfig.NAMESPACE_CONNECTIVITY;
 
 import android.app.Activity;
 import android.app.AlertDialog;
@@ -24,6 +26,7 @@ import android.app.Application;
 import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
+import android.content.pm.PackageManager.NameNotFoundException;
 import android.graphics.Bitmap;
 import android.net.CaptivePortal;
 import android.net.ConnectivityManager;
@@ -38,8 +41,10 @@ import android.net.http.SslCertificate;
 import android.net.http.SslError;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.SystemProperties;
+import android.provider.DeviceConfig;
 import android.text.TextUtils;
 import android.util.ArrayMap;
 import android.util.Log;
@@ -60,6 +65,8 @@ import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.TextView;
 
+import androidx.annotation.NonNull;
+import androidx.annotation.VisibleForTesting;
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 
 import com.android.internal.logging.nano.MetricsProto.MetricsEvent;
@@ -81,6 +88,10 @@ public class CaptivePortalLoginActivity extends Activity {
 
     private static final int SOCKET_TIMEOUT_MS = 10000;
     public static final String HTTP_LOCATION_HEADER_NAME = "Location";
+    private static final String DEFAULT_CAPTIVE_PORTAL_HTTP_URL =
+            "http://connectivitycheck.gstatic.com/generate_204";
+    public static final String DISMISS_PORTAL_IN_VALIDATED_NETWORK =
+            "dismiss_portal_in_validated_network";
 
     private enum Result {
         DISMISSED(MetricsEvent.ACTION_CAPTIVE_PORTAL_LOGIN_RESULT_DISMISSED),
@@ -95,7 +106,8 @@ public class CaptivePortalLoginActivity extends Activity {
     private CaptivePortalProbeSpec mProbeSpec;
     private String mUserAgent;
     private Network mNetwork;
-    private CaptivePortal mCaptivePortal;
+    @VisibleForTesting
+    protected CaptivePortal mCaptivePortal;
     private NetworkCallback mNetworkCallback;
     private ConnectivityManager mCm;
     private WifiManager mWifiManager;
@@ -108,10 +120,8 @@ public class CaptivePortalLoginActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-
         mCaptivePortal = getIntent().getParcelableExtra(ConnectivityManager.EXTRA_CAPTIVE_PORTAL);
         logMetricsEvent(MetricsEvent.ACTION_CAPTIVE_PORTAL_LOGIN_ACTIVITY);
-
         mCm = getSystemService(ConnectivityManager.class);
         mWifiManager = getSystemService(WifiManager.class);
         mNetwork = getIntent().getParcelableExtra(ConnectivityManager.EXTRA_NETWORK);
@@ -141,6 +151,11 @@ public class CaptivePortalLoginActivity extends Activity {
             public void onLost(Network lostNetwork) {
                 // If the network disappears while the app is up, exit.
                 if (mNetwork.equals(lostNetwork)) done(Result.UNWANTED);
+            }
+
+            @Override
+            public void onCapabilitiesChanged(Network network, NetworkCapabilities nc) {
+                handleCapabilitiesChanged(network, nc);
             }
         };
         mCm.registerNetworkCallback(new NetworkRequest.Builder().build(), mNetworkCallback);
@@ -189,7 +204,25 @@ public class CaptivePortalLoginActivity extends Activity {
                 webview.reload();
                 mSwipeRefreshLayout.setRefreshing(true);
             });
+    }
 
+    @VisibleForTesting
+    void handleCapabilitiesChanged(@NonNull final Network network,
+            @NonNull final NetworkCapabilities nc) {
+        if (!isFeatureEnabled(DISMISS_PORTAL_IN_VALIDATED_NETWORK, isDismissPortalEnabled())) {
+            return;
+        }
+
+        if (network.equals(mNetwork) && nc.hasCapability(NET_CAPABILITY_VALIDATED)) {
+            // Dismiss when login is no longer needed since network has validated, exit.
+            done(Result.DISMISSED);
+        }
+    }
+
+    private boolean isDismissPortalEnabled() {
+        return Build.VERSION.SDK_INT > Build.VERSION_CODES.Q
+                || (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q
+                && !"REL".equals(Build.VERSION.CODENAME));
     }
 
     // Find WebView's proxy BroadcastReceiver and prompt it to read proxy system properties.
@@ -263,17 +296,17 @@ public class CaptivePortalLoginActivity extends Activity {
         final Result result;
         final String action;
         final int id = item.getItemId();
-        switch (id) {
-            case R.id.action_use_network:
-                result = Result.WANTED_AS_IS;
-                action = "USE_NETWORK";
-                break;
-            case R.id.action_do_not_use_network:
-                result = Result.UNWANTED;
-                action = "DO_NOT_USE_NETWORK";
-                break;
-            default:
-                return super.onOptionsItemSelected(item);
+        // This can't be a switch case because resource will be declared as static only but not
+        // static final as of ADT 14 in a library project. See
+        // http://tools.android.com/tips/non-constant-fields.
+        if (id == R.id.action_use_network) {
+            result = Result.WANTED_AS_IS;
+            action = "USE_NETWORK";
+        } else if (id == R.id.action_do_not_use_network) {
+            result = Result.UNWANTED;
+            action = "DO_NOT_USE_NETWORK";
+        } else {
+            return super.onOptionsItemSelected(item);
         }
         if (DBG) {
             Log.d(TAG, String.format("onOptionsItemSelect %s for %s", action, mUrl.toString()));
@@ -316,8 +349,13 @@ public class CaptivePortalLoginActivity extends Activity {
 
     private URL getUrl() {
         String url = getIntent().getStringExtra(ConnectivityManager.EXTRA_CAPTIVE_PORTAL_URL);
-        if (url == null) {
-            url = mCm.getCaptivePortalServerUrl();
+        if (url == null) { // TODO: Have a metric to know how often empty url happened.
+            // ConnectivityManager#getCaptivePortalServerUrl is deprecated starting with Android R.
+            if (Build.VERSION.SDK_INT > Build.VERSION_CODES.Q) {
+                url = DEFAULT_CAPTIVE_PORTAL_HTTP_URL;
+            } else {
+                url = mCm.getCaptivePortalServerUrl();
+            }
         }
         return makeURL(url);
     }
@@ -345,6 +383,26 @@ public class CaptivePortalLoginActivity extends Activity {
 
     private static boolean isDebuggable() {
         return SystemProperties.getInt("ro.debuggable", 0) == 1;
+    }
+
+    private void reevaluateNetwork() {
+        if (isFeatureEnabled(DISMISS_PORTAL_IN_VALIDATED_NETWORK, isDismissPortalEnabled())) {
+            // TODO : replace this with an actual call to the method when the network stack
+            // is built against a recent enough SDK.
+            if (callVoidMethodIfExists(mCaptivePortal, "reevaluateNetwork")) return;
+        }
+        testForCaptivePortal();
+    }
+
+    private boolean callVoidMethodIfExists(@NonNull final Object target,
+            @NonNull final String methodName) {
+        try {
+            final Method method = target.getClass().getDeclaredMethod(methodName);
+            method.invoke(target);
+            return true;
+        } catch (ReflectiveOperationException e) {
+            return false;
+        }
     }
 
     private void testForCaptivePortal() {
@@ -443,7 +501,7 @@ public class CaptivePortalLoginActivity extends Activity {
                 getActionBar().setSubtitle(subtitle);
             }
             getProgressBar().setVisibility(View.VISIBLE);
-            testForCaptivePortal();
+            reevaluateNetwork();
         }
 
         @Override
@@ -465,7 +523,7 @@ public class CaptivePortalLoginActivity extends Activity {
                 view.requestFocus();
                 view.clearHistory();
             }
-            testForCaptivePortal();
+            reevaluateNetwork();
         }
 
         // Convert Android scaled-pixels (sp) to HTML size.
@@ -515,13 +573,21 @@ public class CaptivePortalLoginActivity extends Activity {
             mSslError = error;
         }
 
+        private String makeHtmlTag() {
+            if (getWebview().getLayoutDirection() == View.LAYOUT_DIRECTION_RTL) {
+                return "<html dir=\"rtl\">";
+            }
+
+            return "<html>";
+        }
+
         private String makeSslErrorPage() {
             final String warningMsg = getString(R.string.ssl_error_warning);
             final String exampleMsg = getString(R.string.ssl_error_example);
             final String continueMsg = getString(R.string.ssl_error_continue);
             final String certificateMsg = getString(R.string.ssl_error_view_certificate);
             return String.join("\n",
-                    "<html>",
+                    makeHtmlTag(),
                     "<head>",
                     "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">",
                     "  <style>",
@@ -706,5 +772,18 @@ public class CaptivePortalLoginActivity extends Activity {
 
     private static Integer sslErrorMessage(SslError error) {
         return SSL_ERROR_MSGS.get(error.getPrimaryError(), R.string.ssl_error_unknown);
+    }
+
+    private boolean isFeatureEnabled(@NonNull final String name, final boolean defaultEnabled) {
+        final long propertyVersion = DeviceConfig.getLong(NAMESPACE_CONNECTIVITY, name, 0);
+        long mPackageVersion = 0;
+        try {
+            mPackageVersion = getPackageManager().getPackageInfo(
+                getPackageName(), 0).getLongVersionCode();
+        } catch (NameNotFoundException e) {
+            Log.e(TAG, "Could not find the package name", e);
+        }
+        return (propertyVersion == 0 && defaultEnabled)
+                || (propertyVersion != 0 && mPackageVersion >= propertyVersion);
     }
 }
