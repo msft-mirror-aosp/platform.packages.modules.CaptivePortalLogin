@@ -25,12 +25,18 @@ java_defaults {
         "captiveportal-lib",
     ],
     manifest: "AndroidManifest.xml",
+    plugins: ["java_api_finder"],
 }
 
 android_app {
     name: "CaptivePortalLogin",
     defaults: ["CaptivePortalLoginDefaults"],
     certificate: "networkstack",
+}
+
+android_library {
+    name: "CaptivePortalLoginTestLib",
+    defaults: ["CaptivePortalLoginDefaults"],
 }
 
 // Alternative CaptivePortalLogin signed with the platform cert, to use
