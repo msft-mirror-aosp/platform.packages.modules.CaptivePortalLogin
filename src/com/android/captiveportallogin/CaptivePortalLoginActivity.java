@@ -23,6 +23,9 @@ import static android.provider.DeviceConfig.NAMESPACE_CONNECTIVITY;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.Application;
+import android.app.admin.DevicePolicyManager;
+import android.content.ActivityNotFoundException;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
@@ -66,6 +69,7 @@ import android.widget.ProgressBar;
 import android.widget.TextView;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.StringRes;
 import androidx.annotation.VisibleForTesting;
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 
@@ -110,6 +114,7 @@ public class CaptivePortalLoginActivity extends Activity {
     protected CaptivePortal mCaptivePortal;
     private NetworkCallback mNetworkCallback;
     private ConnectivityManager mCm;
+    private DevicePolicyManager mDpm;
     private WifiManager mWifiManager;
     private boolean mLaunchBrowser = false;
     private MyWebViewClient mWebViewClient;
@@ -123,6 +128,7 @@ public class CaptivePortalLoginActivity extends Activity {
         mCaptivePortal = getIntent().getParcelableExtra(ConnectivityManager.EXTRA_CAPTIVE_PORTAL);
         logMetricsEvent(MetricsEvent.ACTION_CAPTIVE_PORTAL_LOGIN_ACTIVITY);
         mCm = getSystemService(ConnectivityManager.class);
+        mDpm = getSystemService(DevicePolicyManager.class);
         mWifiManager = getSystemService(WifiManager.class);
         mNetwork = getIntent().getParcelableExtra(ConnectivityManager.EXTRA_NETWORK);
         mUserAgent =
@@ -204,6 +210,11 @@ public class CaptivePortalLoginActivity extends Activity {
                 webview.reload();
                 mSwipeRefreshLayout.setRefreshing(true);
             });
+    }
+
+    @VisibleForTesting
+    MyWebViewClient getWebViewClient() {
+        return mWebViewClient;
     }
 
     @VisibleForTesting
@@ -456,7 +467,26 @@ public class CaptivePortalLoginActivity extends Activity {
                 : (httpResponseCode == 204);
     }
 
-    private class MyWebViewClient extends WebViewClient {
+    @VisibleForTesting
+    boolean hasVpnNetwork() {
+        for (Network network : mCm.getAllNetworks()) {
+            final NetworkCapabilities nc = mCm.getNetworkCapabilities(network);
+            if (nc != null && nc.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    @VisibleForTesting
+    boolean isAlwaysOnVpnEnabled() {
+        final ComponentName cn = new ComponentName(this, CaptivePortalLoginActivity.class);
+        return mDpm.isAlwaysOnVpnLockdownEnabled(cn);
+    }
+
+    @VisibleForTesting
+    class MyWebViewClient extends WebViewClient {
         private static final String INTERNAL_ASSETS = "file:///android_asset/";
 
         private final String mBrowserBailOutToken = Long.toString(new Random().nextLong());
@@ -581,11 +611,24 @@ public class CaptivePortalLoginActivity extends Activity {
             return "<html>";
         }
 
-        private String makeSslErrorPage() {
-            final String warningMsg = getString(R.string.ssl_error_warning);
-            final String exampleMsg = getString(R.string.ssl_error_example);
-            final String continueMsg = getString(R.string.ssl_error_continue);
-            final String certificateMsg = getString(R.string.ssl_error_view_certificate);
+        // If there is a VPN network or always-on VPN is enabled, there may be no way for user to
+        // see the log-in page by browser. So, hide the link which is used to open the browser.
+        @VisibleForTesting
+        String getVpnMsgOrLinkToBrowser() {
+            if (isAlwaysOnVpnEnabled() || hasVpnNetwork()) {
+                final String vpnWarning = getString(R.string.no_bypass_error_vpnwarning);
+                return "  <div class=vpnwarning>" + vpnWarning + "</div><br>";
+            }
+
+            final String continueMsg = getString(R.string.error_continue_via_browser);
+            return "  <a id=continue_link href=" + mBrowserBailOutToken + ">" + continueMsg
+                    + "</a><br>";
+        }
+
+        private String makeErrorPage(@StringRes int warningMsgRes, @StringRes int exampleMsgRes,
+                String extraLink) {
+            final String warningMsg = getString(warningMsgRes);
+            final String exampleMsg = getString(exampleMsgRes);
             return String.join("\n",
                     makeHtmlTag(),
                     "<head>",
@@ -607,7 +650,7 @@ public class CaptivePortalLoginActivity extends Activity {
                     "      margin-top:16px;",
                     "      opacity:0.87;",
                     "    }",
-                    "    div.example {",
+                    "    div.example, div.vpnwarning {",
                     "      font-size:" + sp(14) + ";",
                     "      line-height:1.21905;",
                     "      margin-top:16px;",
@@ -623,7 +666,7 @@ public class CaptivePortalLoginActivity extends Activity {
                     "      text-decoration:none;",
                     "      text-transform:uppercase;",
                     "    }",
-                    "    a.certificate {",
+                    "    a#cert_link {",
                     "      margin-top:0px;",
                     "    }",
                     "  </style>",
@@ -632,17 +675,38 @@ public class CaptivePortalLoginActivity extends Activity {
                     "  <p><img src=quantum_ic_warning_amber_96.png><br>",
                     "  <div class=warn>" + warningMsg + "</div>",
                     "  <div class=example>" + exampleMsg + "</div>",
-                    "  <a href=" + mBrowserBailOutToken + ">" + continueMsg + "</a><br>",
-                    "  <a class=certificate href=" + mCertificateOutToken + ">" + certificateMsg +
-                            "</a>",
+                    getVpnMsgOrLinkToBrowser(),
+                    extraLink,
                     "</body>",
                     "</html>");
+        }
+
+        private String makeCustomSchemeErrorPage() {
+            return makeErrorPage(R.string.custom_scheme_warning, R.string.custom_scheme_example,
+                    "" /* extraLink */);
+        }
+
+        private String makeSslErrorPage() {
+            final String certificateMsg = getString(R.string.ssl_error_view_certificate);
+            return makeErrorPage(R.string.ssl_error_warning, R.string.ssl_error_example,
+                    "<a id=cert_link href=" + mCertificateOutToken + ">" + certificateMsg
+                            + "</a>");
         }
 
         @Override
         public boolean shouldOverrideUrlLoading (WebView view, String url) {
             if (url.startsWith("tel:")) {
-                startActivity(new Intent(Intent.ACTION_DIAL, Uri.parse(url)));
+                return startActivity(Intent.ACTION_DIAL, url);
+            } else if (url.startsWith("sms:")) {
+                return startActivity(Intent.ACTION_SENDTO, url);
+            } else if (!url.startsWith("http:")
+                    && !url.startsWith("https:") && !url.startsWith(INTERNAL_ASSETS)) {
+                // If the page is not in a supported scheme (HTTP, HTTPS or internal page),
+                // show an error page that informs the user that the page is not supported. The
+                // user can bypass the warning and reopen the portal in browser if needed.
+                // This is done as it is unclear whether third party applications can properly
+                // handle multinetwork scenarios, if the scheme refers to a third party application.
+                loadCustomSchemeErrorPage(view);
                 return true;
             }
             if (url.contains(mCertificateOutToken) && mSslError != null) {
@@ -651,6 +715,24 @@ public class CaptivePortalLoginActivity extends Activity {
             }
             return false;
         }
+
+        private boolean startActivity(String action, String uriData) {
+            final Intent intent = new Intent(action, Uri.parse(uriData));
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            try {
+                CaptivePortalLoginActivity.this.startActivity(intent);
+                return true;
+            } catch (ActivityNotFoundException e) {
+                Log.e(TAG, "No activity found to handle captive portal intent", e);
+                return false;
+            }
+        }
+
+        protected void loadCustomSchemeErrorPage(WebView view) {
+            final String errorPage = makeCustomSchemeErrorPage();
+            view.loadDataWithBaseURL(INTERNAL_ASSETS, errorPage, "text/HTML", "UTF-8", null);
+        }
+
         private void showSslAlertDialog(SslErrorHandler handler, SslError error, String title) {
             final LayoutInflater factory = LayoutInflater.from(CaptivePortalLoginActivity.this);
             final View sslWarningView = factory.inflate(R.layout.ssl_warning, null);
