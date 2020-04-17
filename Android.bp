@@ -20,6 +20,7 @@ java_defaults {
     sdk_version: "system_current",
     min_sdk_version: "28",
     static_libs: [
+        "androidx.annotation_annotation",
         "androidx.legacy_legacy-support-v4",
         "metrics-constants-protos",
         "captiveportal-lib",
