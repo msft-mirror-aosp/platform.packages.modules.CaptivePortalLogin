@@ -48,8 +48,10 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.SystemProperties;
 import android.provider.DeviceConfig;
+import android.provider.MediaStore;
 import android.text.TextUtils;
 import android.util.ArrayMap;
+import android.util.ArraySet;
 import android.util.Log;
 import android.util.SparseArray;
 import android.util.TypedValue;
@@ -58,9 +60,12 @@ import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
 import android.webkit.CookieManager;
+import android.webkit.DownloadListener;
 import android.webkit.SslErrorHandler;
+import android.webkit.URLUtil;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
@@ -68,6 +73,7 @@ import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.TextView;
 
+import androidx.annotation.GuardedBy;
 import androidx.annotation.NonNull;
 import androidx.annotation.StringRes;
 import androidx.annotation.VisibleForTesting;
@@ -81,6 +87,7 @@ import java.lang.reflect.Method;
 import java.net.HttpURLConnection;
 import java.net.MalformedURLException;
 import java.net.URL;
+import java.net.URLConnection;
 import java.util.Objects;
 import java.util.Random;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -122,6 +129,23 @@ public class CaptivePortalLoginActivity extends Activity {
     // Ensures that done() happens once exactly, handling concurrent callers with atomic operations.
     private final AtomicBoolean isDone = new AtomicBoolean(false);
 
+    // When starting downloads a file is created via startActivityForResult(ACTION_CREATE_DOCUMENT).
+    // This array keeps the download request until the activity result is received. It is keyed by
+    // requestCode sent in startActivityForResult.
+    @GuardedBy("mDownloadRequests")
+    private final SparseArray<DownloadRequest> mDownloadRequests = new SparseArray<>();
+    @GuardedBy("mDownloadRequests")
+    private int mNextDownloadRequestId = 1;
+
+    private static final class DownloadRequest {
+        final String mUrl;
+        final String mFilename;
+        DownloadRequest(String url, String filename) {
+            mUrl = url;
+            mFilename = filename;
+        }
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -141,7 +165,7 @@ public class CaptivePortalLoginActivity extends Activity {
             return;
         }
         if (DBG) {
-            Log.d(TAG, String.format("onCreate for %s", mUrl.toString()));
+            Log.d(TAG, String.format("onCreate for %s", mUrl));
         }
 
         final String spec = getIntent().getStringExtra(EXTRA_CAPTIVE_PORTAL_PROBE_SPEC);
@@ -201,6 +225,7 @@ public class CaptivePortalLoginActivity extends Activity {
         mWebViewClient = new MyWebViewClient();
         webview.setWebViewClient(mWebViewClient);
         webview.setWebChromeClient(new MyWebChromeClient());
+        webview.setDownloadListener(new PortalDownloadListener());
         // Start initial page load so WebView finishes loading proxy settings.
         // Actual load of mUrl is initiated by MyWebViewClient.
         webview.loadData("", "text/html", null);
@@ -269,7 +294,7 @@ public class CaptivePortalLoginActivity extends Activity {
             return;
         }
         if (DBG) {
-            Log.d(TAG, String.format("Result %s for %s", result.name(), mUrl.toString()));
+            Log.d(TAG, String.format("Result %s for %s", result.name(), mUrl));
         }
         logMetricsEvent(result.metricsEvent);
         switch (result) {
@@ -320,7 +345,7 @@ public class CaptivePortalLoginActivity extends Activity {
             return super.onOptionsItemSelected(item);
         }
         if (DBG) {
-            Log.d(TAG, String.format("onOptionsItemSelect %s for %s", action, mUrl.toString()));
+            Log.d(TAG, String.format("onOptionsItemSelect %s for %s", action, mUrl));
         }
         done(result);
         return true;
@@ -356,6 +381,33 @@ public class CaptivePortalLoginActivity extends Activity {
             }
             startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
         }
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (resultCode != RESULT_OK || data == null) return;
+
+        // Start download after receiving a created file to download to
+        final DownloadRequest pendingRequest;
+        synchronized (mDownloadRequests) {
+            pendingRequest = mDownloadRequests.get(requestCode);
+            if (pendingRequest == null) {
+                Log.e(TAG, "No pending download for request " + requestCode);
+                return;
+            }
+            mDownloadRequests.remove(requestCode);
+        }
+
+        final Uri fileUri = data.getData();
+        if (fileUri == null) {
+            Log.e(TAG, "No file received from download file creation result");
+            return;
+        }
+
+        final Intent downloadIntent = DownloadService.makeDownloadIntent(getApplicationContext(),
+                mNetwork, mUserAgent, pendingRequest.mUrl, pendingRequest.mFilename, fileUri);
+
+        startForegroundService(downloadIntent);
     }
 
     private URL getUrl() {
@@ -498,7 +550,7 @@ public class CaptivePortalLoginActivity extends Activity {
                     TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, 1,
                     getResources().getDisplayMetrics());
         private int mPagesLoaded;
-        private String mMainFrameUrl;
+        private final ArraySet<String> mMainFrameUrls = new ArraySet<>();
 
         // If we haven't finished cleaning up the history, don't allow going back.
         public boolean allowBack() {
@@ -570,28 +622,38 @@ public class CaptivePortalLoginActivity extends Activity {
         // Check if webview is trying to load the main frame and record its url.
         @Override
         public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+            final String url = request.getUrl().toString();
             if (request.isForMainFrame()) {
-                mMainFrameUrl = request.getUrl().toString();
+                mMainFrameUrls.add(url);
             }
             // Be careful that two shouldOverrideUrlLoading methods are overridden, but
             // shouldOverrideUrlLoading(WebView view, String url) was deprecated in API level 24.
             // TODO: delete deprecated one ??
-            return shouldOverrideUrlLoading(view, mMainFrameUrl);
+            return shouldOverrideUrlLoading(view, url);
+        }
+
+        // Record the initial main frame url. This is only called for the initial resource URL, not
+        // any subsequent redirect URLs.
+        @Override
+        public WebResourceResponse shouldInterceptRequest(WebView view,
+                WebResourceRequest request) {
+            if (request.isForMainFrame()) {
+                mMainFrameUrls.add(request.getUrl().toString());
+            }
+            return null;
         }
 
         // A web page consisting of a large broken lock icon to indicate SSL failure.
-
         @Override
         public void onReceivedSslError(WebView view, SslErrorHandler handler, SslError error) {
-            final URL errorUrl = makeURL(error.getUrl());
-            final URL mainFrameUrl = makeURL(mMainFrameUrl);
+            final String strErrorUrl = error.getUrl();
+            final URL errorUrl = makeURL(strErrorUrl);
             Log.d(TAG, String.format("SSL error: %s, url: %s, certificate: %s",
                     sslErrorName(error), sanitizeURL(errorUrl), error.getCertificate()));
             if (errorUrl == null
-                    // Ignore SSL errors from resources by comparing the main frame url with SSL
-                    // error url.
-                    || !errorUrl.equals(mainFrameUrl)) {
-                Log.d(TAG, "onReceivedSslError: mMainFrameUrl = " + mMainFrameUrl);
+                    // Ignore SSL errors coming from subresources by comparing the
+                    // main frame urls with SSL error url.
+                    || (!mMainFrameUrls.contains(strErrorUrl))) {
                 handler.cancel();
                 return;
             }
@@ -776,6 +838,48 @@ public class CaptivePortalLoginActivity extends Activity {
         @Override
         public void onProgressChanged(WebView view, int newProgress) {
             getProgressBar().setProgress(newProgress);
+        }
+    }
+
+    private class PortalDownloadListener implements DownloadListener {
+        @Override
+        public void onDownloadStart(String url, String userAgent, String contentDisposition,
+                String mimetype, long contentLength) {
+            final String normalizedType = Intent.normalizeMimeType(mimetype);
+            final String displayName = URLUtil.guessFileName(url, contentDisposition,
+                    normalizedType);
+
+            String guessedMimetype = normalizedType;
+            if (TextUtils.isEmpty(guessedMimetype)) {
+                guessedMimetype = URLConnection.guessContentTypeFromName(displayName);
+            }
+            if (TextUtils.isEmpty(guessedMimetype)) {
+                guessedMimetype = MediaStore.Downloads.CONTENT_TYPE;
+            }
+
+            Log.d(TAG, String.format("Starting download for %s, type %s with display name %s",
+                    url, guessedMimetype, displayName));
+
+            final Intent createFileIntent = DownloadService.makeCreateFileIntent(
+                    guessedMimetype, displayName);
+
+            final int requestId;
+            // WebView should call onDownloadStart from the UI thread, but to be extra-safe as
+            // that is not documented behavior, access the download requests array with a lock.
+            synchronized (mDownloadRequests) {
+                requestId = mNextDownloadRequestId++;
+                mDownloadRequests.put(requestId, new DownloadRequest(url, displayName));
+            }
+
+            try {
+                startActivityForResult(createFileIntent, requestId);
+            } catch (ActivityNotFoundException e) {
+                // This could happen in theory if the device has no stock document provider (which
+                // Android normally requires), or if the user disabled all of them, but
+                // should be rare; the download cannot be started as no writeable file can be
+                // created.
+                Log.e(TAG, "No document provider found to create download file", e);
+            }
         }
     }
 
