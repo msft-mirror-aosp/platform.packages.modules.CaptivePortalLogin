@@ -18,7 +18,8 @@ java_defaults {
     name: "CaptivePortalLoginDefaults",
     srcs: ["src/**/*.java"],
     sdk_version: "system_current",
-    min_sdk_version: "28",
+    min_sdk_version: "29",
+    target_sdk_version: "30",
     static_libs: [
         "androidx.annotation_annotation",
         "androidx.legacy_legacy-support-v4",
