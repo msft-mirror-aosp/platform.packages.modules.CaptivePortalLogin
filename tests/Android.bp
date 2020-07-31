@@ -18,8 +18,8 @@ android_test {
     name: "CaptivePortalLoginTests",
     srcs: ["src/**/*.java", "src/**/*.kt"],
     platform_apis: true,
+    min_sdk_version: "29",
     test_suites: ["device-tests"],
-    certificate: "platform",
 
     static_libs: [
         "androidx.test.rules",
