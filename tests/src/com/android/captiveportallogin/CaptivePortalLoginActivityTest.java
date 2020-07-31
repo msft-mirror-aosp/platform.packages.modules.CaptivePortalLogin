@@ -16,6 +16,7 @@
 
 package com.android.captiveportallogin;
 
+import static android.Manifest.permission.MANAGE_TEST_NETWORKS;
 import static android.app.Activity.RESULT_OK;
 import static android.content.Intent.ACTION_CREATE_DOCUMENT;
 import static android.net.ConnectivityManager.ACTION_CAPTIVE_PORTAL_SIGN_IN;
@@ -53,6 +54,7 @@ import static org.mockito.Mockito.verify;
 
 import android.app.Instrumentation.ActivityResult;
 import android.app.KeyguardManager;
+import android.app.UiAutomation;
 import android.app.admin.DevicePolicyManager;
 import android.content.ComponentName;
 import android.content.Context;
@@ -200,8 +202,15 @@ public class CaptivePortalLoginActivityTest {
         // network to ConnectivityManager#bindProcessToNetwork, so it needs to be a real, existing
         // network on the device but otherwise has no functional use at all. The http server set up
         // by this test will run on the loopback interface and will not use this test network.
-        mTestNetworkTracker = initTestNetwork(
-                getInstrumentation().getContext(), TEST_LINKADDR, TEST_TIMEOUT_MS);
+        final UiAutomation automation = InstrumentationRegistry.getInstrumentation()
+                .getUiAutomation();
+        automation.adoptShellPermissionIdentity(MANAGE_TEST_NETWORKS);
+        try {
+            mTestNetworkTracker = initTestNetwork(
+                    getInstrumentation().getContext(), TEST_LINKADDR, TEST_TIMEOUT_MS);
+        } finally {
+            automation.dropShellPermissionIdentity();
+        }
         mNetwork = mTestNetworkTracker.getNetwork();
     }
 
