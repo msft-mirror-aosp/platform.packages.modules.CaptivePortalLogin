@@ -70,7 +70,6 @@ import android.os.Parcel;
 import android.os.Parcelable;
 import android.provider.DeviceConfig;
 
-import androidx.test.InstrumentationRegistry;
 import androidx.test.core.app.ActivityScenario;
 import androidx.test.espresso.intent.Intents;
 import androidx.test.espresso.intent.rule.IntentsTestRule;
@@ -202,8 +201,7 @@ public class CaptivePortalLoginActivityTest {
         // network to ConnectivityManager#bindProcessToNetwork, so it needs to be a real, existing
         // network on the device but otherwise has no functional use at all. The http server set up
         // by this test will run on the loopback interface and will not use this test network.
-        final UiAutomation automation = InstrumentationRegistry.getInstrumentation()
-                .getUiAutomation();
+        final UiAutomation automation = getInstrumentation().getUiAutomation();
         automation.adoptShellPermissionIdentity(MANAGE_TEST_NETWORKS);
         try {
             mTestNetworkTracker = initTestNetwork(
@@ -216,11 +214,13 @@ public class CaptivePortalLoginActivityTest {
 
     @After
     public void tearDown() throws Exception {
-        mSession.finishMocking();
         mActivityRule.finishActivity();
         getInstrumentation().getContext().getSystemService(ConnectivityManager.class)
                 .bindProcessToNetwork(null);
         mTestNetworkTracker.teardown();
+        // finish mocking after the activity has terminated (finishActivity also waits for the
+        // application to be idle) to avoid races on teardown.
+        mSession.finishMocking();
     }
 
     private void initActivity(String url) {
@@ -242,6 +242,7 @@ public class CaptivePortalLoginActivityTest {
                 .requestDismissKeyguard(mActivity, null);
         // Dismiss dialogs or notification shade, so that the test can interact with the activity.
         mActivity.sendBroadcast(new Intent(Intent.ACTION_CLOSE_SYSTEM_DIALOGS));
+        getInstrumentation().waitForIdleSync();
     }
 
     private MockCaptivePortal getCaptivePortal() {
@@ -313,7 +314,7 @@ public class CaptivePortalLoginActivityTest {
 
     private void notifyCapabilitiesChanged(final NetworkCapabilities nc) {
         mActivity.handleCapabilitiesChanged(mNetwork, nc);
-        InstrumentationRegistry.getInstrumentation().waitForIdleSync();
+        getInstrumentation().waitForIdleSync();
     }
 
     private void verifyDismissed() {
