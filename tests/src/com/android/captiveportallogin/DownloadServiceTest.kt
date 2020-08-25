@@ -313,9 +313,18 @@ class DownloadServiceTest {
 
         context.startForegroundService(downloadIntent)
 
-        val doneText = resources.getString(R.string.download_completed)
-        val note = device.wait(Until.findObject(By.text(doneText)), TEST_TIMEOUT_MS)
-        assertNotNull(note, "Notification with text \"$doneText\" not found")
+        // Wait for the "downloading file X" notification to go away
+        val dlText = resources.getString(R.string.downloading_paramfile, testFile.name)
+        assertTrue(device.wait(Until.gone(By.text(dlText)), TEST_TIMEOUT_MS))
+
+        // The download completed notification has the filename as contents,
+        // and R.string.download_completed as title. Since the "downloading file X" notification
+        // went away, the only remaining notification containing the filename is the download
+        // completed notification (if it is the error notification the test will fail to display
+        // the file contents when tapped, as expected). Matching using the filename avoids tapping
+        // the wrong download completed notification.
+        val note = device.wait(Until.findObject(By.text(testFile.name)), TEST_TIMEOUT_MS)
+        assertNotNull(note, "Notification with text \"${testFile.name}\" not found")
 
         note.click()
 
