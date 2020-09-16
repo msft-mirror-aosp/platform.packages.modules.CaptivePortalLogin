@@ -37,7 +37,6 @@ import static androidx.test.platform.app.InstrumentationRegistry.getInstrumentat
 
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.doReturn;
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.mockitoSession;
-import static com.android.dx.mockito.inline.extended.ExtendedMockito.spyOn;
 import static com.android.testutils.TestNetworkTrackerKt.initTestNetwork;
 
 import static junit.framework.Assert.assertEquals;
@@ -46,11 +45,9 @@ import static org.hamcrest.CoreMatchers.not;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
-import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.spy;
-import static org.mockito.Mockito.verify;
 
 import android.app.Instrumentation.ActivityResult;
 import android.app.KeyguardManager;
@@ -66,6 +63,7 @@ import android.net.LinkAddress;
 import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.net.Uri;
+import android.os.ConditionVariable;
 import android.os.Parcel;
 import android.os.Parcelable;
 import android.provider.DeviceConfig;
@@ -84,7 +82,6 @@ import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.mockito.ArgumentCaptor;
 import org.mockito.MockitoAnnotations;
 import org.mockito.MockitoSession;
 import org.mockito.quality.Strictness;
@@ -94,6 +91,8 @@ import java.net.ServerSocket;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
 
 import fi.iki.elonen.NanoHTTPD;
@@ -108,7 +107,7 @@ public class CaptivePortalLoginActivityTest {
     private static final LinkAddress TEST_LINKADDR = new LinkAddress(
             InetAddresses.parseNumericAddress("2001:db8::8"), 64);
     private static final String TEST_USERAGENT = "Test/42.0 Unit-test";
-    private CaptivePortalLoginActivity mActivity;
+    private InstrumentedCaptivePortalLoginActivity mActivity;
     private MockitoSession mSession;
     private Network mNetwork = new Network(TEST_NETID);
     private TestNetworkTracker mTestNetworkTracker;
@@ -117,11 +116,31 @@ public class CaptivePortalLoginActivityTest {
     private static DevicePolicyManager sMockDevicePolicyManager;
 
     public static class InstrumentedCaptivePortalLoginActivity extends CaptivePortalLoginActivity {
+        private final ConditionVariable mDestroyedCv = new ConditionVariable(false);
+        private final CompletableFuture<Intent> mForegroundServiceStart = new CompletableFuture<>();
         @Override
         public Object getSystemService(String name) {
             if (Context.CONNECTIVITY_SERVICE.equals(name)) return sConnectivityManager;
             if (Context.DEVICE_POLICY_SERVICE.equals(name)) return sMockDevicePolicyManager;
             return super.getSystemService(name);
+        }
+
+        @Override
+        public ComponentName startForegroundService(Intent service) {
+            assertTrue("Multiple foreground services were started during the test",
+                    mForegroundServiceStart.complete(service));
+            // Do not actually start the service
+            return service.getComponent();
+        }
+
+        @Override
+        public void onDestroy() {
+            super.onDestroy();
+            mDestroyedCv.open();
+        }
+
+        void waitForDestroy(long timeoutMs) {
+            assertTrue("Activity not destroyed within timeout", mDestroyedCv.block(timeoutMs));
         }
     }
 
@@ -215,11 +234,11 @@ public class CaptivePortalLoginActivityTest {
     @After
     public void tearDown() throws Exception {
         mActivityRule.finishActivity();
+        mActivity.waitForDestroy(TEST_TIMEOUT_MS);
         getInstrumentation().getContext().getSystemService(ConnectivityManager.class)
                 .bindProcessToNetwork(null);
         mTestNetworkTracker.teardown();
-        // finish mocking after the activity has terminated (finishActivity also waits for the
-        // application to be idle) to avoid races on teardown.
+        // finish mocking after the activity has terminated to avoid races on teardown.
         mSession.finishMocking();
     }
 
@@ -468,13 +487,6 @@ public class CaptivePortalLoginActivityTest {
         // Mock file chooser and DownloadService intents
         intending(hasAction(ACTION_CREATE_DOCUMENT)).respondWith(
                 new ActivityResult(RESULT_OK, mockFileResponse));
-        // mockito-intents does not support mocking service starts (only startActivity), and the
-        // activity is created by the framework from the activity start intent. Use extended mockito
-        // to inject a mock on startForegroundService.
-        spyOn(mActivity);
-        final ComponentName downloadComponent = new ComponentName(ctx, DownloadService.class);
-        doReturn(downloadComponent).when(mActivity).startForegroundService(argThat(intent ->
-                downloadComponent.equals(intent.getComponent())));
         // No intent fired yet
         assertEquals(0, Intents.getIntents().size());
 
@@ -491,11 +503,9 @@ public class CaptivePortalLoginActivityTest {
         assertEquals(filename, fileIntent.getStringExtra(Intent.EXTRA_TITLE));
 
         // The download intent should be fired after the create file result is received
-        final ArgumentCaptor<Intent> intentCaptor = ArgumentCaptor.forClass(Intent.class);
-        verify(mActivity).startForegroundService(intentCaptor.capture());
-        final Intent dlIntent = intentCaptor.getValue();
-
-        assertEquals(downloadComponent, dlIntent.getComponent());
+        final Intent dlIntent = mActivity.mForegroundServiceStart.get(
+                TEST_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+        assertEquals(DownloadService.class.getName(), dlIntent.getComponent().getClassName());
         assertEquals(mNetwork, dlIntent.getParcelableExtra(DownloadService.ARG_NETWORK));
         assertEquals(TEST_USERAGENT, dlIntent.getStringExtra(DownloadService.ARG_USERAGENT));
         final String expectedUrl = server.makeUrl(downloadQuery);
