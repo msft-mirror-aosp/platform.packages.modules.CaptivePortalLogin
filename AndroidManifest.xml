@@ -18,7 +18,7 @@
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.android.captiveportallogin"
-    android:versionCode="299900000"
+    android:versionCode="300000000"
     android:versionName="2019-09">
 
     <uses-permission android:name="android.permission.INTERNET" />
