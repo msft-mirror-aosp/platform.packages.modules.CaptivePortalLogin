@@ -63,6 +63,7 @@ import android.net.LinkAddress;
 import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.net.Uri;
+import android.os.Bundle;
 import android.os.ConditionVariable;
 import android.os.Parcel;
 import android.os.Parcelable;
@@ -262,6 +263,18 @@ public class CaptivePortalLoginActivityTest {
         // Dismiss dialogs or notification shade, so that the test can interact with the activity.
         mActivity.sendBroadcast(new Intent(Intent.ACTION_CLOSE_SYSTEM_DIALOGS));
         getInstrumentation().waitForIdleSync();
+    }
+
+    @Test
+    public void testonCreateWithNullCaptivePortal() throws Exception {
+        mActivity = (InstrumentedCaptivePortalLoginActivity) mActivityRule.launchActivity(
+                new Intent(ACTION_CAPTIVE_PORTAL_SIGN_IN)
+                    .putExtra(EXTRA_CAPTIVE_PORTAL_URL, TEST_URL)
+                    .putExtra(EXTRA_NETWORK, mNetwork)
+                    .putExtra(EXTRA_CAPTIVE_PORTAL_USER_AGENT, TEST_USERAGENT)
+                    .putExtra(EXTRA_CAPTIVE_PORTAL, (Bundle) null));
+        // Verify that activity is still created but waiting for closing.
+        assertNotNull(mActivity);
     }
 
     private MockCaptivePortal getCaptivePortal() {
