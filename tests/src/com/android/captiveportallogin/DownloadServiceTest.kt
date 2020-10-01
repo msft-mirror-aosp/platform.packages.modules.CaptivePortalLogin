@@ -17,13 +17,13 @@
 package com.android.captiveportallogin
 
 import android.app.Activity
-import android.app.KeyguardManager
 import android.content.Intent
 import android.net.Network
 import android.net.Uri
 import android.os.Bundle
 import android.os.Parcel
 import android.os.Parcelable
+import android.webkit.MimeTypeMap
 import android.widget.TextView
 import androidx.core.content.FileProvider
 import androidx.test.core.app.ActivityScenario
@@ -33,7 +33,9 @@ import androidx.test.platform.app.InstrumentationRegistry.getInstrumentation
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.Until
+import com.android.dx.mockito.inline.extended.ExtendedMockito.spyOn
 import org.junit.Before
+import org.junit.BeforeClass
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.mockito.Mockito.doReturn
@@ -43,7 +45,6 @@ import org.mockito.Mockito.verify
 import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.FileInputStream
-import java.io.IOException
 import java.io.InputStream
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
@@ -66,11 +67,31 @@ private val TEST_USERAGENT = "Test UserAgent"
 private val TEST_URL = "https://test.download.example.com/myfile"
 private val NOTIFICATION_SHADE_TYPE = "com.android.systemui:id/notification_stack_scroller"
 
+// Test text file registered in the test manifest to be opened by a test activity
+private val TEST_TEXT_FILE_EXTENSION = "testtxtfile"
+private val TEST_TEXT_FILE_TYPE = "text/vnd.captiveportallogin.testtxtfile"
+
 private val TEST_TIMEOUT_MS = 10_000L
 
 @RunWith(AndroidJUnit4::class)
 @SmallTest
 class DownloadServiceTest {
+    companion object {
+        @BeforeClass @JvmStatic
+        fun setUpClass() {
+            // Turn the MimeTypeMap for the process into a spy so test mimetypes can be added
+            val mimetypeMap = MimeTypeMap.getSingleton()
+            spyOn(mimetypeMap)
+            // Use a custom mimetype for the test to avoid cases where the device already has
+            // an app installed that can handle the detected mimetype (would be
+            // application/octet-stream by default for unusual extensions), which would cause the
+            // device to show a dialog to choose the app to use, and make it difficult to test.
+            doReturn(true).`when`(mimetypeMap).hasExtension(TEST_TEXT_FILE_EXTENSION)
+            doReturn(TEST_TEXT_FILE_TYPE).`when`(mimetypeMap).getMimeTypeFromExtension(
+                    TEST_TEXT_FILE_EXTENSION)
+        }
+    }
+
     private val connection = mock(HttpURLConnection::class.java)
 
     private val context by lazy { getInstrumentation().context }
@@ -78,7 +99,8 @@ class DownloadServiceTest {
     private val device by lazy { UiDevice.getInstance(getInstrumentation()) }
 
     // Test network that can be parceled in intents while mocking the connection
-    class TestNetwork : Network(43) {
+    class TestNetwork(private val privateDnsBypass: Boolean = false)
+        : Network(43, privateDnsBypass) {
         companion object {
             // Subclasses of parcelable classes need to define a CREATOR field of their own (which
             // hides the one of the parent class), otherwise the CREATOR field of the parent class
@@ -100,8 +122,22 @@ class DownloadServiceTest {
             internal var sTestConnection: HttpURLConnection? = null
         }
 
+        override fun getPrivateDnsBypassingCopy(): Network {
+            // Note that the privateDnsBypass flag is not kept when parceling/unparceling: this
+            // mirrors the real behavior of that flag in Network.
+            // The test relies on this to verify that after setting privateDnsBypass to true,
+            // the TestNetwork is not parceled / unparceled, which would clear the flag both
+            // for TestNetwork or for a real Network and be a bug.
+            return TestNetwork(privateDnsBypass = true)
+        }
+
         override fun openConnection(url: URL?): URLConnection {
-            return sTestConnection ?: throw IOException("Mock URLConnection not initialized")
+            // Verify that this network was created with privateDnsBypass = true, and was not
+            // parceled / unparceled afterwards (which would have cleared the flag).
+            assertTrue(privateDnsBypass,
+                    "Captive portal downloads should be done on a network bypassing private DNS")
+            return sTestConnection ?: throw IllegalStateException(
+                    "Mock URLConnection not initialized")
         }
     }
 
@@ -270,16 +306,25 @@ class DownloadServiceTest {
         val bis = ByteArrayInputStream(fileContents.toByteArray(StandardCharsets.UTF_8))
         doReturn(bis).`when`(connection).inputStream
 
-        // .testtxtfile extension is handled by OpenTextFileActivity in the test package
-        val testFile = createTestFile(extension = ".testtxtfile")
+        // The test extension is handled by OpenTextFileActivity in the test package
+        val testFile = createTestFile(extension = ".$TEST_TEXT_FILE_EXTENSION")
         val downloadIntent = makeDownloadIntent(testFile)
         openNotificationShade()
 
         context.startForegroundService(downloadIntent)
 
-        val doneText = resources.getString(R.string.download_completed)
-        val note = device.wait(Until.findObject(By.text(doneText)), TEST_TIMEOUT_MS)
-        assertNotNull(note, "Notification with text \"$doneText\" not found")
+        // Wait for the "downloading file X" notification to go away
+        val dlText = resources.getString(R.string.downloading_paramfile, testFile.name)
+        assertTrue(device.wait(Until.gone(By.text(dlText)), TEST_TIMEOUT_MS))
+
+        // The download completed notification has the filename as contents,
+        // and R.string.download_completed as title. Since the "downloading file X" notification
+        // went away, the only remaining notification containing the filename is the download
+        // completed notification (if it is the error notification the test will fail to display
+        // the file contents when tapped, as expected). Matching using the filename avoids tapping
+        // the wrong download completed notification.
+        val note = device.wait(Until.findObject(By.text(testFile.name)), TEST_TIMEOUT_MS)
+        assertNotNull(note, "Notification with text \"${testFile.name}\" not found")
 
         note.click()
 
@@ -315,17 +360,6 @@ class DownloadServiceTest {
             assertEquals(buffer1.take(read1), buffer2.take(read1))
         }
         assertEquals(-1, s2.read(buffer2, 0, 1), "Stream 2 is longer than stream 1")
-    }
-
-    /**
-     * [KeyguardManager.requestDismissKeyguard] requires an activity: this activity allows the test
-     * to dismiss the keyguard by just being started.
-     */
-    class RequestDismissKeyguardActivity : Activity() {
-        override fun onCreate(savedInstanceState: Bundle?) {
-            super.onCreate(savedInstanceState)
-            getSystemService(KeyguardManager::class.java).requestDismissKeyguard(this, null)
-        }
     }
 
     /**
