@@ -37,7 +37,6 @@ import static androidx.test.platform.app.InstrumentationRegistry.getInstrumentat
 
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.doReturn;
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.mockitoSession;
-import static com.android.dx.mockito.inline.extended.ExtendedMockito.spyOn;
 import static com.android.testutils.TestNetworkTrackerKt.initTestNetwork;
 
 import static junit.framework.Assert.assertEquals;
@@ -46,11 +45,9 @@ import static org.hamcrest.CoreMatchers.not;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
-import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.spy;
-import static org.mockito.Mockito.verify;
 
 import android.app.Instrumentation.ActivityResult;
 import android.app.KeyguardManager;
@@ -66,6 +63,9 @@ import android.net.LinkAddress;
 import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.net.Uri;
+import android.os.Build;
+import android.os.Bundle;
+import android.os.ConditionVariable;
 import android.os.Parcel;
 import android.os.Parcelable;
 import android.provider.DeviceConfig;
@@ -75,6 +75,7 @@ import androidx.test.espresso.intent.Intents;
 import androidx.test.espresso.intent.rule.IntentsTestRule;
 import androidx.test.espresso.web.webdriver.Locator;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
+import androidx.test.filters.SdkSuppress;
 import androidx.test.filters.SmallTest;
 
 import com.android.testutils.TestNetworkTracker;
@@ -84,7 +85,6 @@ import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.mockito.ArgumentCaptor;
 import org.mockito.MockitoAnnotations;
 import org.mockito.MockitoSession;
 import org.mockito.quality.Strictness;
@@ -94,6 +94,8 @@ import java.net.ServerSocket;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
 
 import fi.iki.elonen.NanoHTTPD;
@@ -108,7 +110,7 @@ public class CaptivePortalLoginActivityTest {
     private static final LinkAddress TEST_LINKADDR = new LinkAddress(
             InetAddresses.parseNumericAddress("2001:db8::8"), 64);
     private static final String TEST_USERAGENT = "Test/42.0 Unit-test";
-    private CaptivePortalLoginActivity mActivity;
+    private InstrumentedCaptivePortalLoginActivity mActivity;
     private MockitoSession mSession;
     private Network mNetwork = new Network(TEST_NETID);
     private TestNetworkTracker mTestNetworkTracker;
@@ -117,11 +119,31 @@ public class CaptivePortalLoginActivityTest {
     private static DevicePolicyManager sMockDevicePolicyManager;
 
     public static class InstrumentedCaptivePortalLoginActivity extends CaptivePortalLoginActivity {
+        private final ConditionVariable mDestroyedCv = new ConditionVariable(false);
+        private final CompletableFuture<Intent> mForegroundServiceStart = new CompletableFuture<>();
         @Override
         public Object getSystemService(String name) {
             if (Context.CONNECTIVITY_SERVICE.equals(name)) return sConnectivityManager;
             if (Context.DEVICE_POLICY_SERVICE.equals(name)) return sMockDevicePolicyManager;
             return super.getSystemService(name);
+        }
+
+        @Override
+        public ComponentName startForegroundService(Intent service) {
+            assertTrue("Multiple foreground services were started during the test",
+                    mForegroundServiceStart.complete(service));
+            // Do not actually start the service
+            return service.getComponent();
+        }
+
+        @Override
+        public void onDestroy() {
+            super.onDestroy();
+            mDestroyedCv.open();
+        }
+
+        void waitForDestroy(long timeoutMs) {
+            assertTrue("Activity not destroyed within timeout", mDestroyedCv.block(timeoutMs));
         }
     }
 
@@ -215,11 +237,11 @@ public class CaptivePortalLoginActivityTest {
     @After
     public void tearDown() throws Exception {
         mActivityRule.finishActivity();
+        mActivity.waitForDestroy(TEST_TIMEOUT_MS);
         getInstrumentation().getContext().getSystemService(ConnectivityManager.class)
                 .bindProcessToNetwork(null);
         mTestNetworkTracker.teardown();
-        // finish mocking after the activity has terminated (finishActivity also waits for the
-        // application to be idle) to avoid races on teardown.
+        // finish mocking after the activity has terminated to avoid races on teardown.
         mSession.finishMocking();
     }
 
@@ -243,6 +265,18 @@ public class CaptivePortalLoginActivityTest {
         // Dismiss dialogs or notification shade, so that the test can interact with the activity.
         mActivity.sendBroadcast(new Intent(Intent.ACTION_CLOSE_SYSTEM_DIALOGS));
         getInstrumentation().waitForIdleSync();
+    }
+
+    @Test
+    public void testonCreateWithNullCaptivePortal() throws Exception {
+        mActivity = (InstrumentedCaptivePortalLoginActivity) mActivityRule.launchActivity(
+                new Intent(ACTION_CAPTIVE_PORTAL_SIGN_IN)
+                    .putExtra(EXTRA_CAPTIVE_PORTAL_URL, TEST_URL)
+                    .putExtra(EXTRA_NETWORK, mNetwork)
+                    .putExtra(EXTRA_CAPTIVE_PORTAL_USER_AGENT, TEST_USERAGENT)
+                    .putExtra(EXTRA_CAPTIVE_PORTAL, (Bundle) null));
+        // Verify that activity is still created but waiting for closing.
+        assertNotNull(mActivity);
     }
 
     private MockCaptivePortal getCaptivePortal() {
@@ -292,8 +326,7 @@ public class CaptivePortalLoginActivityTest {
         assertTrue(mActivity.isAlwaysOnVpnEnabled());
     }
 
-    @Test
-    public void testVpnMsgOrLinkToBrowser() throws Exception {
+    private void runVpnMsgOrLinkToBrowser(boolean useVpnMatcher) {
         initActivity(TEST_URL);
         // Test non-vpn case.
         configNonVpnNetwork();
@@ -309,7 +342,25 @@ public class CaptivePortalLoginActivityTest {
         // Test always-on vpn case.
         configNonVpnNetwork();
         doReturn(true).when(sMockDevicePolicyManager).isAlwaysOnVpnLockdownEnabled(any());
-        assertTrue(mActivity.getWebViewClient().getVpnMsgOrLinkToBrowser().matches(vpnMatcher));
+        assertTrue(mActivity.getWebViewClient().getVpnMsgOrLinkToBrowser().matches(
+                (useVpnMatcher ? vpnMatcher : linkMatcher)));
+    }
+
+    @Test @SdkSuppress(maxSdkVersion = Build.VERSION_CODES.Q)
+    public void testVpnMsgOrLinkToBrowser_BeforeR() throws Exception {
+        // Before Android R, CaptivePortalLogin cannot call isAlwaysOnVpnLockdownEnabled() due to
+        // permission denied. So CaptivePortalLogin doesn't know the status of VPN always-on, and it
+        // simply provides a link for user to open the browser as usual.
+        runVpnMsgOrLinkToBrowser(false /* useVpnMatcher */);
+    }
+
+    @Test @SdkSuppress(minSdkVersion = Build.VERSION_CODES.R)
+    public void testVpnMsgOrLinkToBrowser() throws Exception {
+        // After Android R(including), DevicePolicyManager allows the caller who has the
+        // PERMISSION_MAINLINE_NETWORK_STACK can call the isAlwaysOnVpnLockdownEnabled() to get the
+        // status of VPN always-on. So the CaptivePortalLogin could know the status of VPN always-on
+        // and show the related warning message to the user.
+        runVpnMsgOrLinkToBrowser(true /* useVpnMatcher */);
     }
 
     private void notifyCapabilitiesChanged(final NetworkCapabilities nc) {
@@ -468,13 +519,6 @@ public class CaptivePortalLoginActivityTest {
         // Mock file chooser and DownloadService intents
         intending(hasAction(ACTION_CREATE_DOCUMENT)).respondWith(
                 new ActivityResult(RESULT_OK, mockFileResponse));
-        // mockito-intents does not support mocking service starts (only startActivity), and the
-        // activity is created by the framework from the activity start intent. Use extended mockito
-        // to inject a mock on startForegroundService.
-        spyOn(mActivity);
-        final ComponentName downloadComponent = new ComponentName(ctx, DownloadService.class);
-        doReturn(downloadComponent).when(mActivity).startForegroundService(argThat(intent ->
-                downloadComponent.equals(intent.getComponent())));
         // No intent fired yet
         assertEquals(0, Intents.getIntents().size());
 
@@ -491,11 +535,9 @@ public class CaptivePortalLoginActivityTest {
         assertEquals(filename, fileIntent.getStringExtra(Intent.EXTRA_TITLE));
 
         // The download intent should be fired after the create file result is received
-        final ArgumentCaptor<Intent> intentCaptor = ArgumentCaptor.forClass(Intent.class);
-        verify(mActivity).startForegroundService(intentCaptor.capture());
-        final Intent dlIntent = intentCaptor.getValue();
-
-        assertEquals(downloadComponent, dlIntent.getComponent());
+        final Intent dlIntent = mActivity.mForegroundServiceStart.get(
+                TEST_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+        assertEquals(DownloadService.class.getName(), dlIntent.getComponent().getClassName());
         assertEquals(mNetwork, dlIntent.getParcelableExtra(DownloadService.ARG_NETWORK));
         assertEquals(TEST_USERAGENT, dlIntent.getStringExtra(DownloadService.ARG_USERAGENT));
         final String expectedUrl = server.makeUrl(downloadQuery);
