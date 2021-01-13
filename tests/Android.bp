@@ -46,4 +46,9 @@ android_test {
         "libdexmakerjvmtiagent",
         "libstaticjvmtiagent",
     ],
+    // If CaptivePortalLoginActivityTest wants to run on Q device, it needs to set sdk_version for
+    // using the portable JNI libraries.
+    // jni_uses_sdk_apis is a workaround for CaptivePortalLoginActivityTest to run on Q device.
+    // See b/154665579 to get more detail.
+    jni_uses_sdk_apis: true,
 }
