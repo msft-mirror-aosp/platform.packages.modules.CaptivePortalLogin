@@ -692,6 +692,9 @@ public class CaptivePortalLoginActivity extends Activity {
         // see the log-in page by browser. So, hide the link which is used to open the browser.
         @VisibleForTesting
         String getVpnMsgOrLinkToBrowser() {
+            // Before Android R, CaptivePortalLogin cannot call the isAlwaysOnVpnLockdownEnabled()
+            // to get the status of VPN always-on due to permission denied. So adding a version
+            // check here to prevent CaptivePortalLogin crashes.
             if (hasVpnNetwork() || (isAtLeastR() && isAlwaysOnVpnEnabled())) {
                 final String vpnWarning = getString(R.string.no_bypass_error_vpnwarning);
                 return "  <div class=vpnwarning>" + vpnWarning + "</div><br>";

@@ -32,6 +32,9 @@ import androidx.test.filters.SmallTest
 import androidx.test.platform.app.InstrumentationRegistry.getInstrumentation
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
+import androidx.test.uiautomator.UiObject
+import androidx.test.uiautomator.UiScrollable
+import androidx.test.uiautomator.UiSelector
 import androidx.test.uiautomator.Until
 import com.android.dx.mockito.inline.extended.ExtendedMockito.spyOn
 import org.junit.Before
@@ -58,7 +61,6 @@ import kotlin.math.min
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
-import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlin.test.fail
 
@@ -72,6 +74,19 @@ private val TEST_TEXT_FILE_EXTENSION = "testtxtfile"
 private val TEST_TEXT_FILE_TYPE = "text/vnd.captiveportallogin.testtxtfile"
 
 private val TEST_TIMEOUT_MS = 10_000L
+// Timeout for notifications before trying to find it via scrolling
+private val NOTIFICATION_NO_SCROLL_TIMEOUT_MS = 1000L
+
+// Maximum number of scrolls from the top to attempt to find notifications in the notification shade
+private val NOTIFICATION_SCROLL_COUNT = 30
+// Swipe in a vertically centered area of 20% of the screen height (40% margin
+// top/down): small swipes on notifications avoid dismissing the notification shade
+private val NOTIFICATION_SCROLL_DEAD_ZONE_PERCENT = .4
+// Steps for each scroll in the notification shade (controls the scrolling speed).
+// Each scroll is a series of cursor moves between multiple points on a line. The delay between each
+// point is hard-coded, so the number of points (steps) controls how long the scroll takes.
+private val NOTIFICATION_SCROLL_STEPS = 5
+private val NOTIFICATION_SCROLL_POLL_MS = 100L
 
 @RunWith(AndroidJUnit4::class)
 @SmallTest
@@ -214,7 +229,19 @@ class DownloadServiceTest {
         // (in the download success notification)
         val testFilePath = File(context.getCacheDir(), "temp")
         testFilePath.mkdir()
-        return File.createTempFile("test", extension, testFilePath)
+        // Do not use File.createTempFile, as it generates very long filenames that may not
+        // fit in notifications, making it difficult to find the right notification.
+        // currentTimeMillis would generally be 13 digits. Use the bottom 8 to fit the filename and
+        // a bit more text, even on very small screens (320 dp, minimum CDD size).
+        var index = System.currentTimeMillis().rem(100_000_000)
+        while (true) {
+            val file = File(testFilePath, "tmp$index$extension")
+            if (!file.exists()) {
+                file.createNewFile()
+                return file
+            }
+            index++
+        }
     }
 
     private fun makeDownloadIntent(testFile: File) = DownloadService.makeDownloadIntent(
@@ -254,8 +281,7 @@ class DownloadServiceTest {
         verify(connection, timeout(TEST_TIMEOUT_MS)).inputStream
         val dlText1 = resources.getString(R.string.downloading_paramfile, testFile1.name)
 
-        assertTrue(device.wait(Until.hasObject(
-                By.res(NOTIFICATION_SHADE_TYPE).hasDescendant(By.text(dlText1))), TEST_TIMEOUT_MS))
+        findNotification(UiSelector().textContains(dlText1))
 
         // Allow download to progress to 1%
         assertEquals(0, TEST_FILESIZE % 100)
@@ -263,8 +289,8 @@ class DownloadServiceTest {
         inputStream1.setAvailable(TEST_FILESIZE / 100)
 
         // 1% progress should be shown in the notification
-        assertTrue(device.wait(Until.hasObject(By.res(NOTIFICATION_SHADE_TYPE).hasDescendant(
-                By.text(NumberFormat.getPercentInstance().format(.01f)))), TEST_TIMEOUT_MS))
+        val progressText = NumberFormat.getPercentInstance().format(.01f)
+        findNotification(UiSelector().textContains(progressText))
 
         // Setup the connection for the next download with indeterminate progress
         val inputStream2 = TestInputStream()
@@ -286,8 +312,7 @@ class DownloadServiceTest {
 
         // A notification should be shown for the second download with indeterminate progress
         val dlText2 = resources.getString(R.string.downloading_paramfile, testFile2.name)
-        assertTrue(device.wait(Until.hasObject(
-                By.res(NOTIFICATION_SHADE_TYPE).hasDescendant(By.text(dlText2))), TEST_TIMEOUT_MS))
+        findNotification(UiSelector().textContains(dlText2))
 
         // Allow the second download to finish
         inputStream2.setAvailable(TEST_FILESIZE)
@@ -313,19 +338,9 @@ class DownloadServiceTest {
 
         context.startForegroundService(downloadIntent)
 
-        // Wait for the "downloading file X" notification to go away
-        val dlText = resources.getString(R.string.downloading_paramfile, testFile.name)
-        assertTrue(device.wait(Until.gone(By.text(dlText)), TEST_TIMEOUT_MS))
-
-        // The download completed notification has the filename as contents,
-        // and R.string.download_completed as title. Since the "downloading file X" notification
-        // went away, the only remaining notification containing the filename is the download
-        // completed notification (if it is the error notification the test will fail to display
-        // the file contents when tapped, as expected). Matching using the filename avoids tapping
-        // the wrong download completed notification.
-        val note = device.wait(Until.findObject(By.text(testFile.name)), TEST_TIMEOUT_MS)
-        assertNotNull(note, "Notification with text \"${testFile.name}\" not found")
-
+        // The download completed notification has the filename as contents, and
+        // R.string.download_completed as title. Find the contents using the filename as exact match
+        val note = findNotification(UiSelector().text(testFile.name))
         note.click()
 
         // OpenTextFileActivity opens the file and shows contents
@@ -336,6 +351,37 @@ class DownloadServiceTest {
         device.wakeUp()
         device.openNotification()
         assertTrue(device.wait(Until.hasObject(By.res(NOTIFICATION_SHADE_TYPE)), TEST_TIMEOUT_MS))
+    }
+
+    private fun findNotification(selector: UiSelector): UiObject {
+        val shadeScroller = UiScrollable(UiSelector().resourceId(NOTIFICATION_SHADE_TYPE))
+                .setSwipeDeadZonePercentage(NOTIFICATION_SCROLL_DEAD_ZONE_PERCENT)
+
+        // Optimistically wait for the notification without scrolling (scrolling is slow)
+        val note = shadeScroller.getChild(selector)
+        if (note.waitForExists(NOTIFICATION_NO_SCROLL_TIMEOUT_MS)) return note
+
+        val limit = System.currentTimeMillis() + TEST_TIMEOUT_MS
+        while (System.currentTimeMillis() < limit) {
+            // Similar to UiScrollable.scrollIntoView, but do not scroll up before going down (it
+            // could open the quick settings), and control the scroll steps (with a large swipe
+            // dead zone, scrollIntoView uses too many steps by default and is very slow).
+            for (i in 0 until NOTIFICATION_SCROLL_COUNT) {
+                val canScrollFurther = shadeScroller.scrollForward(NOTIFICATION_SCROLL_STEPS)
+                if (note.exists()) return note
+                // Scrolled to the end, or scrolled too much and closed the shade
+                if (!canScrollFurther || !shadeScroller.exists()) break
+            }
+
+            // Go back to the top: close then reopen the notification shade.
+            // Do not scroll up, as it could open quick settings (and would be slower).
+            device.pressHome()
+            assertTrue(shadeScroller.waitUntilGone(TEST_TIMEOUT_MS))
+            openNotificationShade()
+
+            Thread.sleep(NOTIFICATION_SCROLL_POLL_MS)
+        }
+        fail("Notification with selector $selector not found")
     }
 
     /**
