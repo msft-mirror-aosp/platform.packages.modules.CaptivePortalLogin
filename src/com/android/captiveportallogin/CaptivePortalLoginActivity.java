@@ -32,8 +32,10 @@ import android.content.Intent;
 import android.content.pm.PackageManager.NameNotFoundException;
 import android.graphics.Bitmap;
 import android.net.CaptivePortal;
+import android.net.CaptivePortalData;
 import android.net.ConnectivityManager;
 import android.net.ConnectivityManager.NetworkCallback;
+import android.net.LinkProperties;
 import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.net.NetworkRequest;
@@ -118,6 +120,7 @@ public class CaptivePortalLoginActivity extends Activity {
     private CaptivePortalProbeSpec mProbeSpec;
     private String mUserAgent;
     private Network mNetwork;
+    private String mVenueFriendlyName = null;
     @VisibleForTesting
     protected CaptivePortal mCaptivePortal;
     private NetworkCallback mNetworkCallback;
@@ -163,6 +166,7 @@ public class CaptivePortalLoginActivity extends Activity {
         mDpm = getSystemService(DevicePolicyManager.class);
         mWifiManager = getSystemService(WifiManager.class);
         mNetwork = getIntent().getParcelableExtra(ConnectivityManager.EXTRA_NETWORK);
+        mVenueFriendlyName = getVenueFriendlyName();
         mUserAgent =
                 getIntent().getStringExtra(ConnectivityManager.EXTRA_CAPTIVE_PORTAL_USER_AGENT);
         mUrl = getUrl();
@@ -911,16 +915,21 @@ public class CaptivePortalLoginActivity extends Activity {
 
     private String getHeaderTitle() {
         NetworkCapabilities nc = mCm.getNetworkCapabilities(mNetwork);
-        final String ssid = getSsid();
-        if (TextUtils.isEmpty(ssid)
+        final String networkName = getNetworkName();
+        if (TextUtils.isEmpty(networkName)
                 || nc == null || !nc.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
             return getString(R.string.action_bar_label);
         }
-        return getString(R.string.action_bar_title, ssid);
+        return getString(R.string.action_bar_title, networkName);
     }
 
-    // TODO: remove once SSID is obtained from NetworkCapabilities
-    private String getSsid() {
+    private String getNetworkName() {
+        // Use the venue friendly name if available
+        if (!TextUtils.isEmpty(mVenueFriendlyName)) {
+            return mVenueFriendlyName;
+        }
+
+        // TODO: remove once SSID is obtained from NetworkCapabilities
         if (mWifiManager == null) {
             return null;
         }
@@ -989,5 +998,36 @@ public class CaptivePortalLoginActivity extends Activity {
         }
         return (propertyVersion == 0 && defaultEnabled)
                 || (propertyVersion != 0 && mPackageVersion >= propertyVersion);
+    }
+
+    private String getVenueFriendlyName() {
+        if (!isAtLeastR()) {
+            return null;
+        }
+        final LinkProperties linkProperties = mCm.getLinkProperties(mNetwork);
+        if (linkProperties == null) {
+            return null;
+        }
+        if (linkProperties.getCaptivePortalData() == null) {
+            return null;
+        }
+        final CaptivePortalData captivePortalData = linkProperties.getCaptivePortalData();
+
+        if (captivePortalData == null) {
+            return null;
+        }
+
+        // TODO: Use CaptivePortalData#getVenueFriendlyName when building with S
+        // Use reflection for now
+        final Class captivePortalDataClass = captivePortalData.getClass();
+        Method getVenueFriendlyNameMethod = null;
+        try {
+            getVenueFriendlyNameMethod = captivePortalDataClass.getDeclaredMethod(
+                    "getVenueFriendlyName");
+            return (String) getVenueFriendlyNameMethod.invoke(captivePortalData);
+        } catch (Exception e) {
+            // Do nothing
+        }
+        return null;
     }
 }
