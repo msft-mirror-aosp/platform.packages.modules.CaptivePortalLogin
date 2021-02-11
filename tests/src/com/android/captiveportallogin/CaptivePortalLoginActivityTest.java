@@ -45,9 +45,11 @@ import static org.hamcrest.CoreMatchers.not;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assume.assumeTrue;
 import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.when;
 
 import android.app.Instrumentation.ActivityResult;
 import android.app.KeyguardManager;
@@ -57,9 +59,11 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.net.CaptivePortal;
+import android.net.CaptivePortalData;
 import android.net.ConnectivityManager;
 import android.net.InetAddresses;
 import android.net.LinkAddress;
+import android.net.LinkProperties;
 import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.net.Uri;
@@ -90,6 +94,7 @@ import org.mockito.MockitoSession;
 import org.mockito.quality.Strictness;
 
 import java.io.IOException;
+import java.lang.reflect.Method;
 import java.net.ServerSocket;
 import java.util.Collections;
 import java.util.HashMap;
@@ -110,6 +115,7 @@ public class CaptivePortalLoginActivityTest {
     private static final LinkAddress TEST_LINKADDR = new LinkAddress(
             InetAddresses.parseNumericAddress("2001:db8::8"), 64);
     private static final String TEST_USERAGENT = "Test/42.0 Unit-test";
+    private static final String TEST_FRIENDLY_NAME = "Network friendly name";
     private InstrumentedCaptivePortalLoginActivity mActivity;
     private MockitoSession mSession;
     private Network mNetwork = new Network(TEST_NETID);
@@ -546,6 +552,59 @@ public class CaptivePortalLoginActivityTest {
         assertEquals(mockFile, dlIntent.getParcelableExtra(DownloadService.ARG_OUTFILE));
 
         server.stop();
+    }
+
+    @Test
+    public void testVenueFriendlyNameTitle() throws Exception {
+        assumeTrue(isAtLeastS());
+        final LinkProperties linkProperties = new LinkProperties();
+        CaptivePortalData.Builder captivePortalDataBuilder = new CaptivePortalData.Builder();
+        // TODO: Use reflection for setVenueFriendlyName until shims are available
+        final Class captivePortalDataBuilderClass = captivePortalDataBuilder.getClass();
+        Method setVenueFriendlyNameMethod = null;
+
+        try {
+            setVenueFriendlyNameMethod = captivePortalDataBuilderClass.getDeclaredMethod(
+                    "setVenueFriendlyNameMethod", String.class);
+        } catch (NoSuchMethodException e) {
+            // If this method does not exist, we cannot continue running this test
+            return;
+        }
+        captivePortalDataBuilder = (CaptivePortalData.Builder)
+                setVenueFriendlyNameMethod.invoke(captivePortalDataBuilder,
+                        TEST_FRIENDLY_NAME);
+
+        final CaptivePortalData captivePortalData = captivePortalDataBuilder.build();
+        linkProperties.setCaptivePortalData(captivePortalData);
+        when(sConnectivityManager.getLinkProperties(mNetwork)).thenReturn(linkProperties);
+        initActivity("https://tc.example.com/");
+
+        // Verify that the correct venue friendly name is used
+        assertEquals(mActivity.getActionBar().getTitle(),
+                getInstrumentation().getContext().getString(R.string.action_bar_title,
+                        TEST_FRIENDLY_NAME));
+    }
+
+    /**
+     * Check whether the device release or development API level is strictly higher than the passed
+     * in level.
+     *
+     * @return True if the device supports an SDK that has or will have a higher version number,
+     *         even if still in development.
+     */
+    private static boolean isReleaseOrDevelopmentApiAbove(int apiLevel) {
+        // In-development API after n may have SDK_INT == n and CODENAME != REL
+        // Stable API n has SDK_INT == n and CODENAME == REL.
+        final int devApiLevel = Build.VERSION.SDK_INT
+                + ("REL".equals(Build.VERSION.CODENAME) ? 0 : 1);
+        return devApiLevel > apiLevel;
+    }
+
+    /**
+     * Check whether the device supports in-development or final S networking APIs.
+     */
+    private static boolean isAtLeastS() {
+        return isReleaseOrDevelopmentApiAbove(Build.VERSION_CODES.R);
     }
 
     private static boolean isEventually(BooleanSupplier condition, long timeout)
