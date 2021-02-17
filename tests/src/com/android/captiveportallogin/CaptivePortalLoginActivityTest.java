@@ -561,15 +561,11 @@ public class CaptivePortalLoginActivityTest {
         CaptivePortalData.Builder captivePortalDataBuilder = new CaptivePortalData.Builder();
         // TODO: Use reflection for setVenueFriendlyName until shims are available
         final Class captivePortalDataBuilderClass = captivePortalDataBuilder.getClass();
-        Method setVenueFriendlyNameMethod = null;
+        final Method setVenueFriendlyNameMethod;
 
-        try {
-            setVenueFriendlyNameMethod = captivePortalDataBuilderClass.getDeclaredMethod(
-                    "setVenueFriendlyNameMethod", String.class);
-        } catch (NoSuchMethodException e) {
-            // If this method does not exist, we cannot continue running this test
-            return;
-        }
+        setVenueFriendlyNameMethod = captivePortalDataBuilderClass.getDeclaredMethod(
+                "setVenueFriendlyNameMethod", String.class);
+
         captivePortalDataBuilder = (CaptivePortalData.Builder)
                 setVenueFriendlyNameMethod.invoke(captivePortalDataBuilder,
                         TEST_FRIENDLY_NAME);

@@ -1020,9 +1020,8 @@ public class CaptivePortalLoginActivity extends Activity {
         // TODO: Use CaptivePortalData#getVenueFriendlyName when building with S
         // Use reflection for now
         final Class captivePortalDataClass = captivePortalData.getClass();
-        Method getVenueFriendlyNameMethod = null;
         try {
-            getVenueFriendlyNameMethod = captivePortalDataClass.getDeclaredMethod(
+            final Method getVenueFriendlyNameMethod = captivePortalDataClass.getDeclaredMethod(
                     "getVenueFriendlyName");
             return (String) getVenueFriendlyNameMethod.invoke(captivePortalData);
         } catch (Exception e) {
