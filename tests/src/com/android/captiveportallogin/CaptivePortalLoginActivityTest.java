@@ -184,11 +184,6 @@ public class CaptivePortalLoginActivityTest {
         }
 
         @Override
-        public void logEvent(int eventId, String packageName) {
-            // Do nothing
-        }
-
-        @Override
         public void writeToParcel(Parcel out, int flags) {
             out.writeInt(mDismissTimes);
             out.writeInt(mIgnoreTimes);
