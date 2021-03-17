@@ -161,7 +161,6 @@ public class CaptivePortalLoginActivity extends Activity {
             finish();
             return;
         }
-        logMetricsEvent(MetricsEvent.ACTION_CAPTIVE_PORTAL_LOGIN_ACTIVITY);
         mCm = getSystemService(ConnectivityManager.class);
         mDpm = getSystemService(DevicePolicyManager.class);
         mWifiManager = getSystemService(WifiManager.class);
@@ -312,7 +311,6 @@ public class CaptivePortalLoginActivity extends Activity {
         if (DBG) {
             Log.d(TAG, String.format("Result %s for %s", result.name(), mUrl));
         }
-        logMetricsEvent(result.metricsEvent);
         switch (result) {
             case DISMISSED:
                 mCaptivePortal.reportCaptivePortalDismissed();
@@ -676,7 +674,6 @@ public class CaptivePortalLoginActivity extends Activity {
                 handler.cancel();
                 return;
             }
-            logMetricsEvent(MetricsEvent.CAPTIVE_PORTAL_LOGIN_ACTIVITY_SSL_ERROR);
             final String sslErrorPage = makeSslErrorPage();
             view.loadDataWithBaseURL(INTERNAL_ASSETS, sslErrorPage, "text/HTML", "UTF-8", null);
             mSslErrorTitle = view.getTitle() == null ? "" : view.getTitle();
@@ -953,10 +950,6 @@ public class CaptivePortalLoginActivity extends Activity {
             return https + "://" + host;
         }
         return host;
-    }
-
-    private void logMetricsEvent(int event) {
-        mCaptivePortal.logEvent(event, getPackageName());
     }
 
     private static final SparseArray<String> SSL_ERRORS = new SparseArray<>();
