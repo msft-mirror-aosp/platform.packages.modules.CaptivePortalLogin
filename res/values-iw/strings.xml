@@ -2,7 +2,7 @@
 <resources xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:xliff="urn:oasis:names:tc:xliff:document:1.2">
     <string name="app_name" msgid="5832002141924282426">"CaptivePortalLogin"</string>
-    <string name="action_use_network" msgid="8239049683838236305">"השתמש ברשת זו כפי שהיא"</string>
+    <string name="action_use_network" msgid="8239049683838236305">"שימוש ברשת הזו כפי שהיא"</string>
     <string name="action_do_not_use_network" msgid="6324702363356892396">"לא להשתמש ברשת הזו"</string>
     <string name="action_bar_label" msgid="2023171629563754892">"כניסה לרשת"</string>
     <string name="action_bar_title" msgid="2566334512545554724">"‏כניסה אל %1$s"</string>
