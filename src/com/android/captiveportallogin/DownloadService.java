@@ -122,7 +122,7 @@ public class DownloadService extends Service {
                     .setIdentifier(String.valueOf(mId));
 
             final PendingIntent pendingIntent = PendingIntent.getService(context,
-                    0 /* requestCode */, cancelIntent, 0 /* flags */);
+                    0 /* requestCode */, cancelIntent, PendingIntent.FLAG_IMMUTABLE);
             final Notification.Action cancelAction = new Notification.Action.Builder(
                     Icon.createWithResource(context, R.drawable.ic_close),
                     res.getString(android.R.string.cancel),
