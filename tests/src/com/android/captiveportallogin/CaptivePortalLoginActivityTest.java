@@ -67,6 +67,8 @@ import android.net.LinkProperties;
 import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.net.Uri;
+import android.net.wifi.WifiInfo;
+import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.ConditionVariable;
@@ -96,6 +98,7 @@ import org.mockito.quality.Strictness;
 import java.io.IOException;
 import java.lang.reflect.Method;
 import java.net.ServerSocket;
+import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
@@ -110,6 +113,8 @@ import fi.iki.elonen.NanoHTTPD;
 public class CaptivePortalLoginActivityTest {
     private static final String TEST_URL = "http://android.test.com";
     private static final int TEST_NETID = 1234;
+    private static final String TEST_NC_SSID = "Test NetworkCapabilities SSID";
+    private static final String TEST_WIFIINFO_SSID = "Test Other SSID";
     private static final String TEST_URL_QUERY = "testquery";
     private static final long TEST_TIMEOUT_MS = 10_000L;
     private static final LinkAddress TEST_LINKADDR = new LinkAddress(
@@ -122,6 +127,7 @@ public class CaptivePortalLoginActivityTest {
     private TestNetworkTracker mTestNetworkTracker;
 
     private static ConnectivityManager sConnectivityManager;
+    private static WifiManager sMockWifiManager;
     private static DevicePolicyManager sMockDevicePolicyManager;
 
     public static class InstrumentedCaptivePortalLoginActivity extends CaptivePortalLoginActivity {
@@ -129,9 +135,16 @@ public class CaptivePortalLoginActivityTest {
         private final CompletableFuture<Intent> mForegroundServiceStart = new CompletableFuture<>();
         @Override
         public Object getSystemService(String name) {
-            if (Context.CONNECTIVITY_SERVICE.equals(name)) return sConnectivityManager;
-            if (Context.DEVICE_POLICY_SERVICE.equals(name)) return sMockDevicePolicyManager;
-            return super.getSystemService(name);
+            switch (name) {
+                case Context.CONNECTIVITY_SERVICE:
+                    return sConnectivityManager;
+                case Context.DEVICE_POLICY_SERVICE:
+                    return sMockDevicePolicyManager;
+                case Context.WIFI_SERVICE:
+                    return sMockWifiManager;
+                default:
+                    return super.getSystemService(name);
+            }
         }
 
         @Override
@@ -213,6 +226,7 @@ public class CaptivePortalLoginActivityTest {
     public void setUp() throws Exception {
         final Context context = getInstrumentation().getContext();
         sConnectivityManager = spy(context.getSystemService(ConnectivityManager.class));
+        sMockWifiManager = mock(WifiManager.class);
         sMockDevicePolicyManager = mock(DevicePolicyManager.class);
         MockitoAnnotations.initMocks(this);
         mSession = mockitoSession()
@@ -233,15 +247,34 @@ public class CaptivePortalLoginActivityTest {
             automation.dropShellPermissionIdentity();
         }
         mNetwork = mTestNetworkTracker.getNetwork();
+
+        final WifiInfo testInfo = makeWifiInfo();
+        doReturn(testInfo).when(sMockWifiManager).getConnectionInfo();
+    }
+
+    private static WifiInfo makeWifiInfo() throws Exception {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            return new WifiInfo.Builder()
+                    .setSsid(TEST_WIFIINFO_SSID.getBytes(StandardCharsets.US_ASCII))
+                    .build();
+        }
+
+        // WifiInfo did not have a builder before R. Use non-public APIs on Q to set SSID.
+        final WifiInfo info = WifiInfo.class.getConstructor().newInstance();
+        final Class<?> wifiSsidClass = Class.forName("android.net.wifi.WifiSsid");
+        final Object wifiSsid = wifiSsidClass.getMethod("createFromAsciiEncoded",
+                String.class).invoke(null, TEST_WIFIINFO_SSID);
+        WifiInfo.class.getMethod("setSSID", wifiSsidClass).invoke(info, wifiSsid);
+        return info;
     }
 
     @After
     public void tearDown() throws Exception {
         mActivityRule.finishActivity();
-        mActivity.waitForDestroy(TEST_TIMEOUT_MS);
+        if (mActivity != null) mActivity.waitForDestroy(TEST_TIMEOUT_MS);
         getInstrumentation().getContext().getSystemService(ConnectivityManager.class)
                 .bindProcessToNetwork(null);
-        mTestNetworkTracker.teardown();
+        if (mTestNetworkTracker != null) mTestNetworkTracker.teardown();
         // finish mocking after the activity has terminated to avoid races on teardown.
         mSession.finishMocking();
     }
@@ -287,8 +320,17 @@ public class CaptivePortalLoginActivityTest {
     private void configNonVpnNetwork() {
         final Network[] networks = new Network[] {new Network(mNetwork)};
         doReturn(networks).when(sConnectivityManager).getAllNetworks();
-        final NetworkCapabilities nonVpnCapabilities = new NetworkCapabilities()
-                .addTransportType(NetworkCapabilities.TRANSPORT_WIFI);
+        final NetworkCapabilities nonVpnCapabilities;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            // SSID and NetworkCapabilities builder was added in R
+            nonVpnCapabilities = new NetworkCapabilities.Builder()
+                    .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                    .setSsid(TEST_NC_SSID)
+                    .build();
+        } else {
+            nonVpnCapabilities = new NetworkCapabilities()
+                    .addTransportType(NetworkCapabilities.TRANSPORT_WIFI);
+        }
         doReturn(nonVpnCapabilities).when(sConnectivityManager).getNetworkCapabilities(
                 mNetwork);
     }
@@ -559,21 +601,39 @@ public class CaptivePortalLoginActivityTest {
         final Method setVenueFriendlyNameMethod;
 
         setVenueFriendlyNameMethod = captivePortalDataBuilderClass.getDeclaredMethod(
-                "setVenueFriendlyNameMethod", String.class);
+                "setVenueFriendlyName", CharSequence.class);
 
         captivePortalDataBuilder = (CaptivePortalData.Builder)
-                setVenueFriendlyNameMethod.invoke(captivePortalDataBuilder,
-                        TEST_FRIENDLY_NAME);
+                setVenueFriendlyNameMethod.invoke(captivePortalDataBuilder, TEST_FRIENDLY_NAME);
 
         final CaptivePortalData captivePortalData = captivePortalDataBuilder.build();
         linkProperties.setCaptivePortalData(captivePortalData);
+
         when(sConnectivityManager.getLinkProperties(mNetwork)).thenReturn(linkProperties);
+        configNonVpnNetwork();
         initActivity("https://tc.example.com/");
 
         // Verify that the correct venue friendly name is used
+        assertEquals(getInstrumentation().getContext().getString(R.string.action_bar_title,
+                TEST_FRIENDLY_NAME), mActivity.getActionBar().getTitle());
+    }
+
+    @Test @SdkSuppress(maxSdkVersion = Build.VERSION_CODES.Q)
+    public void testWifiSsid_Q() throws Exception {
+        configNonVpnNetwork();
+        initActivity("https://portal.example.com/");
         assertEquals(mActivity.getActionBar().getTitle(),
                 getInstrumentation().getContext().getString(R.string.action_bar_title,
-                        TEST_FRIENDLY_NAME));
+                        TEST_WIFIINFO_SSID));
+    }
+
+    @Test @SdkSuppress(minSdkVersion = Build.VERSION_CODES.R)
+    public void testWifiSsid() throws Exception {
+        configNonVpnNetwork();
+        initActivity("https://portal.example.com/");
+        assertEquals(mActivity.getActionBar().getTitle(),
+                getInstrumentation().getContext().getString(R.string.action_bar_title,
+                        TEST_NC_SSID));
     }
 
     /**
