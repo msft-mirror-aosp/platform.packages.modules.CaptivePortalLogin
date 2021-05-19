@@ -120,7 +120,7 @@ public class CaptivePortalLoginActivity extends Activity {
     private CaptivePortalProbeSpec mProbeSpec;
     private String mUserAgent;
     private Network mNetwork;
-    private String mVenueFriendlyName = null;
+    private CharSequence mVenueFriendlyName = null;
     @VisibleForTesting
     protected CaptivePortal mCaptivePortal;
     private NetworkCallback mNetworkCallback;
@@ -912,7 +912,7 @@ public class CaptivePortalLoginActivity extends Activity {
 
     private String getHeaderTitle() {
         NetworkCapabilities nc = mCm.getNetworkCapabilities(mNetwork);
-        final String networkName = getNetworkName();
+        final CharSequence networkName = getNetworkName(nc);
         if (TextUtils.isEmpty(networkName)
                 || nc == null || !nc.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
             return getString(R.string.action_bar_label);
@@ -920,18 +920,25 @@ public class CaptivePortalLoginActivity extends Activity {
         return getString(R.string.action_bar_title, networkName);
     }
 
-    private String getNetworkName() {
+    private CharSequence getNetworkName(NetworkCapabilities nc) {
         // Use the venue friendly name if available
         if (!TextUtils.isEmpty(mVenueFriendlyName)) {
             return mVenueFriendlyName;
         }
 
-        // TODO: remove once SSID is obtained from NetworkCapabilities
-        if (mWifiManager == null) {
+        // SSID is only available in NetworkCapabilities from R
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            if (mWifiManager == null) {
+                return null;
+            }
+            final WifiInfo wifiInfo = mWifiManager.getConnectionInfo();
+            return removeDoubleQuotes(wifiInfo.getSSID());
+        }
+
+        if (nc == null) {
             return null;
         }
-        final WifiInfo wifiInfo = mWifiManager.getConnectionInfo();
-        return removeDoubleQuotes(wifiInfo.getSSID());
+        return removeDoubleQuotes(nc.getSsid());
     }
 
     private static String removeDoubleQuotes(String string) {
@@ -993,7 +1000,7 @@ public class CaptivePortalLoginActivity extends Activity {
                 || (propertyVersion != 0 && mPackageVersion >= propertyVersion);
     }
 
-    private String getVenueFriendlyName() {
+    private CharSequence getVenueFriendlyName() {
         if (!isAtLeastR()) {
             return null;
         }
@@ -1016,7 +1023,7 @@ public class CaptivePortalLoginActivity extends Activity {
         try {
             final Method getVenueFriendlyNameMethod = captivePortalDataClass.getDeclaredMethod(
                     "getVenueFriendlyName");
-            return (String) getVenueFriendlyNameMethod.invoke(captivePortalData);
+            return (CharSequence) getVenueFriendlyNameMethod.invoke(captivePortalData);
         } catch (Exception e) {
             // Do nothing
         }
