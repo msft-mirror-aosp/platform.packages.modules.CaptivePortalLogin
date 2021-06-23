@@ -14,8 +14,13 @@
 // limitations under the License.
 //
 
+package {
+    default_applicable_licenses: ["Android-Apache-2.0"],
+}
+
 android_test {
     name: "CaptivePortalLoginTests",
+    defaults: ["framework-connectivity-test-defaults"],
     srcs: ["src/**/*.java", "src/**/*.kt"],
     platform_apis: true,
     min_sdk_version: "29",
