@@ -49,6 +49,7 @@
             android:name="com.android.captiveportallogin.CaptivePortalLoginActivity"
             android:label="@string/action_bar_label"
             android:theme="@style/AppTheme"
+            android:exported="true"
             android:configChanges="keyboardHidden|orientation|screenSize" >
             <intent-filter>
                 <action android:name="android.net.conn.CAPTIVE_PORTAL"/>
