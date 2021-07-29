@@ -25,7 +25,8 @@ android_test {
     platform_apis: true,
     min_sdk_version: "29",
     target_sdk_version: "30", // Keep in sync with CaptivePortalLogin
-    test_suites: ["device-tests"],
+    test_suites: ["general-tests"],
+    test_mainline_modules: ["CaptivePortalLoginGoogle.apk+NetworkStackGoogle.apk+com.google.android.resolv.apex+com.google.android.tethering.apex"],
 
     static_libs: [
         "androidx.test.rules",
