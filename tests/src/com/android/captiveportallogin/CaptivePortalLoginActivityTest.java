@@ -27,8 +27,10 @@ import static android.net.ConnectivityManager.EXTRA_NETWORK;
 import static android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED;
 import static android.provider.DeviceConfig.NAMESPACE_CONNECTIVITY;
 
+import static androidx.lifecycle.Lifecycle.State.DESTROYED;
 import static androidx.test.espresso.intent.Intents.intending;
 import static androidx.test.espresso.intent.matcher.IntentMatchers.hasAction;
+import static androidx.test.espresso.intent.matcher.IntentMatchers.hasData;
 import static androidx.test.espresso.intent.matcher.IntentMatchers.isInternal;
 import static androidx.test.espresso.web.sugar.Web.onWebView;
 import static androidx.test.espresso.web.webdriver.DriverAtoms.findElement;
@@ -38,16 +40,19 @@ import static androidx.test.platform.app.InstrumentationRegistry.getInstrumentat
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.doReturn;
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.mockitoSession;
 import static com.android.testutils.TestNetworkTrackerKt.initTestNetwork;
+import static com.android.testutils.TestPermissionUtil.runAsShell;
 
 import static junit.framework.Assert.assertEquals;
 
+import static org.hamcrest.CoreMatchers.allOf;
 import static org.hamcrest.CoreMatchers.not;
 import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assume.assumeTrue;
 import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.when;
 
 import android.app.Instrumentation.ActivityResult;
 import android.app.KeyguardManager;
@@ -57,12 +62,16 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.net.CaptivePortal;
+import android.net.CaptivePortalData;
 import android.net.ConnectivityManager;
 import android.net.InetAddresses;
 import android.net.LinkAddress;
+import android.net.LinkProperties;
 import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.net.Uri;
+import android.net.wifi.WifiInfo;
+import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.ConditionVariable;
@@ -72,7 +81,6 @@ import android.provider.DeviceConfig;
 
 import androidx.test.core.app.ActivityScenario;
 import androidx.test.espresso.intent.Intents;
-import androidx.test.espresso.intent.rule.IntentsTestRule;
 import androidx.test.espresso.web.webdriver.Locator;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 import androidx.test.filters.SdkSuppress;
@@ -82,7 +90,6 @@ import com.android.testutils.TestNetworkTracker;
 
 import org.junit.After;
 import org.junit.Before;
-import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.MockitoAnnotations;
@@ -90,12 +97,15 @@ import org.mockito.MockitoSession;
 import org.mockito.quality.Strictness;
 
 import java.io.IOException;
+import java.lang.reflect.Method;
 import java.net.ServerSocket;
+import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 
 import fi.iki.elonen.NanoHTTPD;
@@ -105,17 +115,21 @@ import fi.iki.elonen.NanoHTTPD;
 public class CaptivePortalLoginActivityTest {
     private static final String TEST_URL = "http://android.test.com";
     private static final int TEST_NETID = 1234;
+    private static final String TEST_NC_SSID = "Test NetworkCapabilities SSID";
+    private static final String TEST_WIFIINFO_SSID = "Test Other SSID";
     private static final String TEST_URL_QUERY = "testquery";
     private static final long TEST_TIMEOUT_MS = 10_000L;
     private static final LinkAddress TEST_LINKADDR = new LinkAddress(
             InetAddresses.parseNumericAddress("2001:db8::8"), 64);
     private static final String TEST_USERAGENT = "Test/42.0 Unit-test";
-    private InstrumentedCaptivePortalLoginActivity mActivity;
+    private static final String TEST_FRIENDLY_NAME = "Network friendly name";
+    private ActivityScenario<InstrumentedCaptivePortalLoginActivity> mActivityScenario;
     private MockitoSession mSession;
     private Network mNetwork = new Network(TEST_NETID);
     private TestNetworkTracker mTestNetworkTracker;
 
     private static ConnectivityManager sConnectivityManager;
+    private static WifiManager sMockWifiManager;
     private static DevicePolicyManager sMockDevicePolicyManager;
 
     public static class InstrumentedCaptivePortalLoginActivity extends CaptivePortalLoginActivity {
@@ -123,9 +137,16 @@ public class CaptivePortalLoginActivityTest {
         private final CompletableFuture<Intent> mForegroundServiceStart = new CompletableFuture<>();
         @Override
         public Object getSystemService(String name) {
-            if (Context.CONNECTIVITY_SERVICE.equals(name)) return sConnectivityManager;
-            if (Context.DEVICE_POLICY_SERVICE.equals(name)) return sMockDevicePolicyManager;
-            return super.getSystemService(name);
+            switch (name) {
+                case Context.CONNECTIVITY_SERVICE:
+                    return sConnectivityManager;
+                case Context.DEVICE_POLICY_SERVICE:
+                    return sMockDevicePolicyManager;
+                case Context.WIFI_SERVICE:
+                    return sMockWifiManager;
+                default:
+                    return super.getSystemService(name);
+            }
         }
 
         @Override
@@ -140,10 +161,6 @@ public class CaptivePortalLoginActivityTest {
         public void onDestroy() {
             super.onDestroy();
             mDestroyedCv.open();
-        }
-
-        void waitForDestroy(long timeoutMs) {
-            assertTrue("Activity not destroyed within timeout", mDestroyedCv.block(timeoutMs));
         }
     }
 
@@ -178,11 +195,6 @@ public class CaptivePortalLoginActivityTest {
         }
 
         @Override
-        public void logEvent(int eventId, String packageName) {
-            // Do nothing
-        }
-
-        @Override
         public void writeToParcel(Parcel out, int flags) {
             out.writeInt(mDismissTimes);
             out.writeInt(mIgnoreTimes);
@@ -203,15 +215,11 @@ public class CaptivePortalLoginActivityTest {
         };
     }
 
-    @Rule
-    public final IntentsTestRule mActivityRule =
-            new IntentsTestRule<>(InstrumentedCaptivePortalLoginActivity.class,
-                    false /* initialTouchMode */, false  /* launchActivity */);
-
     @Before
     public void setUp() throws Exception {
         final Context context = getInstrumentation().getContext();
         sConnectivityManager = spy(context.getSystemService(ConnectivityManager.class));
+        sMockWifiManager = mock(WifiManager.class);
         sMockDevicePolicyManager = mock(DevicePolicyManager.class);
         MockitoAnnotations.initMocks(this);
         mSession = mockitoSession()
@@ -232,62 +240,105 @@ public class CaptivePortalLoginActivityTest {
             automation.dropShellPermissionIdentity();
         }
         mNetwork = mTestNetworkTracker.getNetwork();
+
+        final WifiInfo testInfo = makeWifiInfo();
+        doReturn(testInfo).when(sMockWifiManager).getConnectionInfo();
+    }
+
+    private static WifiInfo makeWifiInfo() throws Exception {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            return new WifiInfo.Builder()
+                    .setSsid(TEST_WIFIINFO_SSID.getBytes(StandardCharsets.US_ASCII))
+                    .build();
+        }
+
+        // WifiInfo did not have a builder before R. Use non-public APIs on Q to set SSID.
+        final WifiInfo info = WifiInfo.class.getConstructor().newInstance();
+        final Class<?> wifiSsidClass = Class.forName("android.net.wifi.WifiSsid");
+        final Object wifiSsid = wifiSsidClass.getMethod("createFromAsciiEncoded",
+                String.class).invoke(null, TEST_WIFIINFO_SSID);
+        WifiInfo.class.getMethod("setSSID", wifiSsidClass).invoke(info, wifiSsid);
+        return info;
     }
 
     @After
     public void tearDown() throws Exception {
-        mActivityRule.finishActivity();
-        mActivity.waitForDestroy(TEST_TIMEOUT_MS);
+        if (mActivityScenario != null) {
+            mActivityScenario.close();
+            Intents.release();
+        }
         getInstrumentation().getContext().getSystemService(ConnectivityManager.class)
                 .bindProcessToNetwork(null);
-        mTestNetworkTracker.teardown();
+        if (mTestNetworkTracker != null) {
+            runAsShell(MANAGE_TEST_NETWORKS, mTestNetworkTracker::teardown);
+        }
         // finish mocking after the activity has terminated to avoid races on teardown.
         mSession.finishMocking();
     }
 
     private void initActivity(String url) {
-        // onCreate will be triggered in launchActivity(). Handle mock objects after
-        // launchActivity() if any new mock objects. Activity launching flow will be
-        //  1. launchActivity()
-        //  2. onCreate()
-        //  3. end of launchActivity()
-        mActivity = (InstrumentedCaptivePortalLoginActivity) mActivityRule.launchActivity(
-            new Intent(ACTION_CAPTIVE_PORTAL_SIGN_IN)
-                .putExtra(EXTRA_CAPTIVE_PORTAL_URL, url)
-                .putExtra(EXTRA_NETWORK, mNetwork)
-                .putExtra(EXTRA_CAPTIVE_PORTAL_USER_AGENT, TEST_USERAGENT)
-                .putExtra(EXTRA_CAPTIVE_PORTAL, new MockCaptivePortal())
-        );
-        // Verify activity created successfully.
-        assertNotNull(mActivity);
-        getInstrumentation().getContext().getSystemService(KeyguardManager.class)
-                .requestDismissKeyguard(mActivity, null);
-        // Dismiss dialogs or notification shade, so that the test can interact with the activity.
-        mActivity.sendBroadcast(new Intent(Intent.ACTION_CLOSE_SYSTEM_DIALOGS));
+        final Context ctx = getInstrumentation().getContext();
+        mActivityScenario = ActivityScenario.launch(
+                new Intent(ctx, InstrumentedCaptivePortalLoginActivity.class)
+                        .setAction(ACTION_CAPTIVE_PORTAL_SIGN_IN)
+                        .putExtra(EXTRA_CAPTIVE_PORTAL_URL, url)
+                        .putExtra(EXTRA_NETWORK, mNetwork)
+                        .putExtra(EXTRA_CAPTIVE_PORTAL_USER_AGENT, TEST_USERAGENT)
+                        .putExtra(EXTRA_CAPTIVE_PORTAL, new MockCaptivePortal()));
+        mActivityScenario.onActivity(activity -> {
+            ctx.getSystemService(KeyguardManager.class).requestDismissKeyguard(activity, null);
+            // Dismiss dialogs or notification shade, so the test can interact with the activity.
+            activity.sendBroadcast(new Intent(Intent.ACTION_CLOSE_SYSTEM_DIALOGS));
+        });
         getInstrumentation().waitForIdleSync();
+
+        // Initialize intent capturing after launching the activity to avoid capturing extra intents
+        Intents.init();
     }
 
     @Test
     public void testonCreateWithNullCaptivePortal() throws Exception {
-        mActivity = (InstrumentedCaptivePortalLoginActivity) mActivityRule.launchActivity(
-                new Intent(ACTION_CAPTIVE_PORTAL_SIGN_IN)
-                    .putExtra(EXTRA_CAPTIVE_PORTAL_URL, TEST_URL)
-                    .putExtra(EXTRA_NETWORK, mNetwork)
-                    .putExtra(EXTRA_CAPTIVE_PORTAL_USER_AGENT, TEST_USERAGENT)
-                    .putExtra(EXTRA_CAPTIVE_PORTAL, (Bundle) null));
-        // Verify that activity is still created but waiting for closing.
-        assertNotNull(mActivity);
+        final Context ctx = getInstrumentation().getContext();
+        final Intent intent = new Intent(ctx, InstrumentedCaptivePortalLoginActivity.class)
+                .setAction(ACTION_CAPTIVE_PORTAL_SIGN_IN)
+                .putExtra(EXTRA_CAPTIVE_PORTAL_URL, TEST_URL)
+                .putExtra(EXTRA_NETWORK, mNetwork)
+                .putExtra(EXTRA_CAPTIVE_PORTAL_USER_AGENT, TEST_USERAGENT)
+                .putExtra(EXTRA_CAPTIVE_PORTAL, (Bundle) null);
+        try (ActivityScenario<InstrumentedCaptivePortalLoginActivity> scenario =
+                     ActivityScenario.launch(intent)) {
+            getInstrumentation().waitForIdleSync();
+            // Verify that activity calls finish() immediately in its onCreate
+            assertEquals(DESTROYED, scenario.getState());
+        }
     }
 
+    /**
+     * Get the activity MockCaptivePortal.
+     *
+     * The activity may use a different MockCaptivePortal instance after being recreated, so the
+     * MockCaptivePortal should not be kept across possible activity recreation.
+     */
     private MockCaptivePortal getCaptivePortal() {
-        return (MockCaptivePortal) mActivity.mCaptivePortal;
+        final AtomicReference<MockCaptivePortal> portalRef = new AtomicReference<>();
+        mActivityScenario.onActivity(a -> portalRef.set((MockCaptivePortal) a.mCaptivePortal));
+        return portalRef.get();
     }
 
     private void configNonVpnNetwork() {
         final Network[] networks = new Network[] {new Network(mNetwork)};
         doReturn(networks).when(sConnectivityManager).getAllNetworks();
-        final NetworkCapabilities nonVpnCapabilities = new NetworkCapabilities()
-                .addTransportType(NetworkCapabilities.TRANSPORT_WIFI);
+        final NetworkCapabilities nonVpnCapabilities;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            // SSID and NetworkCapabilities builder was added in R
+            nonVpnCapabilities = new NetworkCapabilities.Builder()
+                    .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                    .setSsid(TEST_NC_SSID)
+                    .build();
+        } else {
+            nonVpnCapabilities = new NetworkCapabilities()
+                    .addTransportType(NetworkCapabilities.TRANSPORT_WIFI);
+        }
         doReturn(nonVpnCapabilities).when(sConnectivityManager).getNetworkCapabilities(
                 mNetwork);
     }
@@ -311,19 +362,21 @@ public class CaptivePortalLoginActivityTest {
         initActivity(TEST_URL);
         // Test non-vpn case.
         configNonVpnNetwork();
-        assertFalse(mActivity.hasVpnNetwork());
+        mActivityScenario.onActivity(activity -> assertFalse(activity.hasVpnNetwork()));
+
         // Test vpn case.
         configVpnNetwork();
-        assertTrue(mActivity.hasVpnNetwork());
+        mActivityScenario.onActivity(activity -> assertTrue(activity.hasVpnNetwork()));
     }
 
     @Test
     public void testIsAlwaysOnVpnEnabled() throws Exception {
         initActivity(TEST_URL);
         doReturn(false).when(sMockDevicePolicyManager).isAlwaysOnVpnLockdownEnabled(any());
-        assertFalse(mActivity.isAlwaysOnVpnEnabled());
+        mActivityScenario.onActivity(activity -> assertFalse(activity.isAlwaysOnVpnEnabled()));
+
         doReturn(true).when(sMockDevicePolicyManager).isAlwaysOnVpnLockdownEnabled(any());
-        assertTrue(mActivity.isAlwaysOnVpnEnabled());
+        mActivityScenario.onActivity(activity -> assertTrue(activity.isAlwaysOnVpnEnabled()));
     }
 
     private void runVpnMsgOrLinkToBrowser(boolean useVpnMatcher) {
@@ -332,18 +385,21 @@ public class CaptivePortalLoginActivityTest {
         configNonVpnNetwork();
         doReturn(false).when(sMockDevicePolicyManager).isAlwaysOnVpnLockdownEnabled(any());
         final String linkMatcher = ".*<a[^>]+href.*";
-        assertTrue(mActivity.getWebViewClient().getVpnMsgOrLinkToBrowser().matches(linkMatcher));
+        mActivityScenario.onActivity(act ->
+                assertTrue(act.getWebViewClient().getVpnMsgOrLinkToBrowser().matches(linkMatcher)));
 
         // Test has vpn case.
         configVpnNetwork();
         final String vpnMatcher = ".*<div.*vpnwarning.*";
-        assertTrue(mActivity.getWebViewClient().getVpnMsgOrLinkToBrowser().matches(vpnMatcher));
+        mActivityScenario.onActivity(act ->
+                assertTrue(act.getWebViewClient().getVpnMsgOrLinkToBrowser().matches(vpnMatcher)));
 
         // Test always-on vpn case.
         configNonVpnNetwork();
         doReturn(true).when(sMockDevicePolicyManager).isAlwaysOnVpnLockdownEnabled(any());
-        assertTrue(mActivity.getWebViewClient().getVpnMsgOrLinkToBrowser().matches(
-                (useVpnMatcher ? vpnMatcher : linkMatcher)));
+        mActivityScenario.onActivity(act ->
+                assertTrue(act.getWebViewClient().getVpnMsgOrLinkToBrowser().matches(
+                        (useVpnMatcher ? vpnMatcher : linkMatcher))));
     }
 
     @Test @SdkSuppress(maxSdkVersion = Build.VERSION_CODES.Q)
@@ -364,20 +420,18 @@ public class CaptivePortalLoginActivityTest {
     }
 
     private void notifyCapabilitiesChanged(final NetworkCapabilities nc) {
-        mActivity.handleCapabilitiesChanged(mNetwork, nc);
+        mActivityScenario.onActivity(a -> a.handleCapabilitiesChanged(mNetwork, nc));
         getInstrumentation().waitForIdleSync();
     }
 
-    private void verifyDismissed() {
+    private void notifyValidatedChangedAndDismissed(final NetworkCapabilities nc) {
+        // Get the MockCaptivePortal before the activity destroys itself
         final MockCaptivePortal cp = getCaptivePortal();
+        notifyCapabilitiesChanged(nc);
+
         assertEquals(cp.mDismissTimes, 1);
         assertEquals(cp.mIgnoreTimes, 0);
         assertEquals(cp.mUseTimes, 0);
-    }
-
-    private void notifyValidatedChangedAndDismissed(final NetworkCapabilities nc) {
-        notifyCapabilitiesChanged(nc);
-        verifyDismissed();
     }
 
     private void verifyNotDone() {
@@ -390,13 +444,6 @@ public class CaptivePortalLoginActivityTest {
     private void notifyValidatedChangedNotDone(final NetworkCapabilities nc) {
         notifyCapabilitiesChanged(nc);
         verifyNotDone();
-    }
-
-    private void verifyUseAsIs() {
-        final MockCaptivePortal cp = getCaptivePortal();
-        assertEquals(cp.mDismissTimes, 0);
-        assertEquals(cp.mIgnoreTimes, 0);
-        assertEquals(cp.mUseTimes, 1);
     }
 
     private void setDismissPortalInValidatedNetwork(final boolean enable) {
@@ -479,17 +526,32 @@ public class CaptivePortalLoginActivityTest {
         final HttpServer server = runCustomSchemeTest("mailto:test@example.com");
         assertEquals(0, Intents.getIntents().size());
 
+        // The intent is sent in onDestroy, but getIntents cannot be called after the activity is
+        // destroyed. Capture it in the call that sends the intent before onDestroy returns.
+        final ConditionVariable intentCv = new ConditionVariable(false);
+        Intents.intending(allOf(hasAction(Intent.ACTION_VIEW),
+                hasData(Uri.parse(server.makeUrl(TEST_URL_QUERY)))))
+                .respondWithFunction(intent -> {
+                    intentCv.open();
+                    // Do not specify an activity response, as this would crash the test (the
+                    // activity will be destroyed just after it sends the intent so it cannot
+                    // receive a response)
+                    return null;
+                });
+
+        final MockCaptivePortal cp = getCaptivePortal();
         onWebView().withElement(findElement(Locator.ID, "continue_link"))
                 .perform(webClick());
 
-        // The intent is sent in onDestroy(); there is no way to wait for that event, so poll
-        // until the intent is found.
-        assertTrue(isEventually(() -> Intents.getIntents().size() == 1, TEST_TIMEOUT_MS));
-        verifyUseAsIs();
-        final Intent sentIntent = Intents.getIntents().get(0);
-        assertEquals(Intent.ACTION_VIEW, sentIntent.getAction());
-        assertEquals(Uri.parse(server.makeUrl(TEST_URL_QUERY)), sentIntent.getData());
+        assertTrue("ACTION_VIEW intent not received after " + TEST_TIMEOUT_MS + "ms",
+                intentCv.block(TEST_TIMEOUT_MS));
 
+        getInstrumentation().waitForIdleSync();
+        assertEquals(DESTROYED, mActivityScenario.getState());
+
+        assertEquals(cp.mDismissTimes, 0);
+        assertEquals(cp.mIgnoreTimes, 0);
+        assertEquals(cp.mUseTimes, 1);
         server.stop();
     }
 
@@ -511,7 +573,6 @@ public class CaptivePortalLoginActivityTest {
         initActivity(server.makeUrl(TEST_URL_QUERY));
 
         // Create a mock file to be returned when mocking the file chooser
-        final Context ctx = mActivity.getApplicationContext();
         final Intent mockFileResponse = new Intent();
         final Uri mockFile = Uri.parse("content://mockdata");
         mockFileResponse.setData(mockFile);
@@ -535,8 +596,10 @@ public class CaptivePortalLoginActivityTest {
         assertEquals(filename, fileIntent.getStringExtra(Intent.EXTRA_TITLE));
 
         // The download intent should be fired after the create file result is received
-        final Intent dlIntent = mActivity.mForegroundServiceStart.get(
-                TEST_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+        final CompletableFuture<Intent> dlIntentFuture = new CompletableFuture<>();
+        mActivityScenario.onActivity(a ->
+                a.mForegroundServiceStart.thenAccept(dlIntentFuture::complete));
+        final Intent dlIntent = dlIntentFuture.get(TEST_TIMEOUT_MS, TimeUnit.MILLISECONDS);
         assertEquals(DownloadService.class.getName(), dlIntent.getComponent().getClassName());
         assertEquals(mNetwork, dlIntent.getParcelableExtra(DownloadService.ARG_NETWORK));
         assertEquals(TEST_USERAGENT, dlIntent.getStringExtra(DownloadService.ARG_USERAGENT));
@@ -546,6 +609,77 @@ public class CaptivePortalLoginActivityTest {
         assertEquals(mockFile, dlIntent.getParcelableExtra(DownloadService.ARG_OUTFILE));
 
         server.stop();
+    }
+
+    @Test
+    public void testVenueFriendlyNameTitle() throws Exception {
+        assumeTrue(isAtLeastS());
+        final LinkProperties linkProperties = new LinkProperties();
+        CaptivePortalData.Builder captivePortalDataBuilder = new CaptivePortalData.Builder();
+        // TODO: Use reflection for setVenueFriendlyName until shims are available
+        final Class captivePortalDataBuilderClass = captivePortalDataBuilder.getClass();
+        final Method setVenueFriendlyNameMethod;
+
+        setVenueFriendlyNameMethod = captivePortalDataBuilderClass.getDeclaredMethod(
+                "setVenueFriendlyName", CharSequence.class);
+
+        captivePortalDataBuilder = (CaptivePortalData.Builder)
+                setVenueFriendlyNameMethod.invoke(captivePortalDataBuilder, TEST_FRIENDLY_NAME);
+
+        final CaptivePortalData captivePortalData = captivePortalDataBuilder.build();
+        linkProperties.setCaptivePortalData(captivePortalData);
+
+        when(sConnectivityManager.getLinkProperties(mNetwork)).thenReturn(linkProperties);
+        configNonVpnNetwork();
+        initActivity("https://tc.example.com/");
+
+        // Verify that the correct venue friendly name is used
+        mActivityScenario.onActivity(activity ->
+                assertEquals(getInstrumentation().getContext().getString(R.string.action_bar_title,
+                        TEST_FRIENDLY_NAME), activity.getActionBar().getTitle()));
+    }
+
+    @Test @SdkSuppress(maxSdkVersion = Build.VERSION_CODES.Q)
+    public void testWifiSsid_Q() throws Exception {
+        configNonVpnNetwork();
+        initActivity("https://portal.example.com/");
+        mActivityScenario.onActivity(activity ->
+                assertEquals(activity.getActionBar().getTitle(),
+                        getInstrumentation().getContext().getString(R.string.action_bar_title,
+                                TEST_WIFIINFO_SSID)));
+
+    }
+
+    @Test @SdkSuppress(minSdkVersion = Build.VERSION_CODES.R)
+    public void testWifiSsid() throws Exception {
+        configNonVpnNetwork();
+        initActivity("https://portal.example.com/");
+        mActivityScenario.onActivity(activity ->
+                assertEquals(activity.getActionBar().getTitle(),
+                        getInstrumentation().getContext().getString(R.string.action_bar_title,
+                                TEST_NC_SSID)));
+    }
+
+    /**
+     * Check whether the device release or development API level is strictly higher than the passed
+     * in level.
+     *
+     * @return True if the device supports an SDK that has or will have a higher version number,
+     *         even if still in development.
+     */
+    private static boolean isReleaseOrDevelopmentApiAbove(int apiLevel) {
+        // In-development API after n may have SDK_INT == n and CODENAME != REL
+        // Stable API n has SDK_INT == n and CODENAME == REL.
+        final int devApiLevel = Build.VERSION.SDK_INT
+                + ("REL".equals(Build.VERSION.CODENAME) ? 0 : 1);
+        return devApiLevel > apiLevel;
+    }
+
+    /**
+     * Check whether the device supports in-development or final S networking APIs.
+     */
+    private static boolean isAtLeastS() {
+        return isReleaseOrDevelopmentApiAbove(Build.VERSION_CODES.R);
     }
 
     private static boolean isEventually(BooleanSupplier condition, long timeout)
