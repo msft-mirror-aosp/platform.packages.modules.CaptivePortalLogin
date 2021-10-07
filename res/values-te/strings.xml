@@ -22,7 +22,7 @@
     <string name="custom_scheme_warning" msgid="1809266150423969087">"మరొక యాప్‌ను తెరవమని మీరు చేరడానికి ప్రయత్నిస్తున్న నెట్‌వర్క్ అభ్యర్థిస్తోంది."</string>
     <string name="custom_scheme_example" msgid="7126568152528588592">"ఉదాహరణకు, ప్రామాణీకరణ కోసం లాగిన్ పేజీకి ఒక నిర్దిష్ట యాప్ అవసరం కావచ్చు"</string>
     <string name="ok" msgid="6584612582120777209">"సరే"</string>
-    <string name="page_info_address" msgid="1290683284404217554">"చిరునామా:"</string>
+    <string name="page_info_address" msgid="1290683284404217554">"అడ్రస్‌:"</string>
     <string name="page_info" msgid="46593086046896385">"పేజీ సమాచారం"</string>
     <string name="downloading_paramfile" msgid="685182551665849043">"%1$sను డౌన్‌లోడ్ చేస్తోంది"</string>
     <string name="download_completed" msgid="5430865338124330584">"డౌన్‌లోడ్ పూర్తయింది"</string>
