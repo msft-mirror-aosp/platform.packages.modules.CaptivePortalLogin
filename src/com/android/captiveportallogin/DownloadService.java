@@ -122,7 +122,7 @@ public class DownloadService extends Service {
                     .setIdentifier(String.valueOf(mId));
 
             final PendingIntent pendingIntent = PendingIntent.getService(context,
-                    0 /* requestCode */, cancelIntent, 0 /* flags */);
+                    0 /* requestCode */, cancelIntent, PendingIntent.FLAG_IMMUTABLE);
             final Notification.Action cancelAction = new Notification.Action.Builder(
                     Icon.createWithResource(context, R.drawable.ic_close),
                     res.getString(android.R.string.cancel),
@@ -430,7 +430,7 @@ public class DownloadService extends Service {
                 .setIdentifier(String.valueOf(taskId));
 
         final PendingIntent pendingIntent = PendingIntent.getActivity(
-                this, 0 /* requestCode */, intent, 0 /* flags */);
+                this, 0 /* requestCode */, intent, PendingIntent.FLAG_IMMUTABLE);
         return new Notification.Builder(this, CHANNEL_DOWNLOADS)
                 .setContentTitle(getResources().getString(R.string.download_completed))
                 .setContentText(displayName)
