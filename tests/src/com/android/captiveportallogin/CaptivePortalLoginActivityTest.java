@@ -30,7 +30,6 @@ import static android.provider.DeviceConfig.NAMESPACE_CONNECTIVITY;
 import static androidx.lifecycle.Lifecycle.State.DESTROYED;
 import static androidx.test.espresso.intent.Intents.intending;
 import static androidx.test.espresso.intent.matcher.IntentMatchers.hasAction;
-import static androidx.test.espresso.intent.matcher.IntentMatchers.hasData;
 import static androidx.test.espresso.intent.matcher.IntentMatchers.isInternal;
 import static androidx.test.espresso.web.sugar.Web.onWebView;
 import static androidx.test.espresso.web.webdriver.DriverAtoms.findElement;
@@ -44,7 +43,6 @@ import static com.android.testutils.TestPermissionUtil.runAsShell;
 
 import static junit.framework.Assert.assertEquals;
 
-import static org.hamcrest.CoreMatchers.allOf;
 import static org.hamcrest.CoreMatchers.not;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
@@ -105,6 +103,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 
@@ -123,6 +122,7 @@ public class CaptivePortalLoginActivityTest {
             InetAddresses.parseNumericAddress("2001:db8::8"), 64);
     private static final String TEST_USERAGENT = "Test/42.0 Unit-test";
     private static final String TEST_FRIENDLY_NAME = "Network friendly name";
+    private static final String TEST_PORTAL_HOSTNAME = "localhost";
     private ActivityScenario<InstrumentedCaptivePortalLoginActivity> mActivityScenario;
     private MockitoSession mSession;
     private Network mNetwork = new Network(TEST_NETID);
@@ -135,6 +135,9 @@ public class CaptivePortalLoginActivityTest {
     public static class InstrumentedCaptivePortalLoginActivity extends CaptivePortalLoginActivity {
         private final ConditionVariable mDestroyedCv = new ConditionVariable(false);
         private final CompletableFuture<Intent> mForegroundServiceStart = new CompletableFuture<>();
+        // Workaround for https://github.com/android/android-test/issues/1119
+        private final CompletableFuture<Intent> mOpenInBrowserIntent =
+                new CompletableFuture<>();
         @Override
         public Object getSystemService(String name) {
             switch (name) {
@@ -161,6 +164,17 @@ public class CaptivePortalLoginActivityTest {
         public void onDestroy() {
             super.onDestroy();
             mDestroyedCv.open();
+        }
+
+        @Override
+        public void startActivity(Intent intent) {
+            if (Intent.ACTION_VIEW.equals(intent.getAction())
+                    && intent.getData() != null
+                    && intent.getData().getAuthority().startsWith(TEST_PORTAL_HOSTNAME)) {
+                mOpenInBrowserIntent.complete(intent);
+                return;
+            }
+            super.startActivity(intent);
         }
     }
 
@@ -264,6 +278,8 @@ public class CaptivePortalLoginActivityTest {
     @After
     public void tearDown() throws Exception {
         if (mActivityScenario != null) {
+            // Note this may sometimes block for 45 seconds until
+            // https://github.com/android/android-test/issues/676 is fixed
             mActivityScenario.close();
             Intents.release();
         }
@@ -526,25 +542,21 @@ public class CaptivePortalLoginActivityTest {
         final HttpServer server = runCustomSchemeTest("mailto:test@example.com");
         assertEquals(0, Intents.getIntents().size());
 
-        // The intent is sent in onDestroy, but getIntents cannot be called after the activity is
-        // destroyed. Capture it in the call that sends the intent before onDestroy returns.
-        final ConditionVariable intentCv = new ConditionVariable(false);
-        Intents.intending(allOf(hasAction(Intent.ACTION_VIEW),
-                hasData(Uri.parse(server.makeUrl(TEST_URL_QUERY)))))
-                .respondWithFunction(intent -> {
-                    intentCv.open();
-                    // Do not specify an activity response, as this would crash the test (the
-                    // activity will be destroyed just after it sends the intent so it cannot
-                    // receive a response)
-                    return null;
-                });
+        // Mockito intents cannot be used for an intent sent in onDestroy, due to
+        // https://github.com/android/android-test/issues/1119
+        final CompletableFuture<Intent> viewIntent = new CompletableFuture<>();
+        mActivityScenario.onActivity(a -> a.mOpenInBrowserIntent.thenAccept(viewIntent::complete));
 
         final MockCaptivePortal cp = getCaptivePortal();
         onWebView().withElement(findElement(Locator.ID, "continue_link"))
                 .perform(webClick());
 
-        assertTrue("ACTION_VIEW intent not received after " + TEST_TIMEOUT_MS + "ms",
-                intentCv.block(TEST_TIMEOUT_MS));
+        try {
+            viewIntent.get(TEST_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+        } catch (TimeoutException e) {
+            throw new AssertionError(
+                    "Open in browser intent not received after " + TEST_TIMEOUT_MS + "ms", e);
+        }
 
         getInstrumentation().waitForIdleSync();
         assertEquals(DESTROYED, mActivityScenario.getState());
@@ -716,7 +728,7 @@ public class CaptivePortalLoginActivityTest {
 
         private HttpServer(ServerSocket socket) {
             // 0 as port for picking a port automatically
-            super("localhost", 0);
+            super(TEST_PORTAL_HOSTNAME, 0);
             mSocket = socket;
         }
 
@@ -728,7 +740,7 @@ public class CaptivePortalLoginActivityTest {
         private String makeUrl(String query) {
             return new Uri.Builder()
                     .scheme("http")
-                    .encodedAuthority("localhost:" + mSocket.getLocalPort())
+                    .encodedAuthority(TEST_PORTAL_HOSTNAME + ":" + mSocket.getLocalPort())
                     // Explicitly specify an empty path to match the format of URLs returned by
                     // WebView (for example in onDownloadStart)
                     .path("/")
