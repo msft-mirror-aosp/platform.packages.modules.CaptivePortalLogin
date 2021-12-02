@@ -17,6 +17,7 @@
  */
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+          xmlns:tools="http://schemas.android.com/tools"
     package="com.android.captiveportallogin"
     android:versionCode="319999900"
     android:versionName="s_aml_319999900">
@@ -57,5 +58,14 @@
             </intent-filter>
         </activity>
         <service android:name=".DownloadService" android:exported="false" />
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="com.android.captiveportallogin.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths"/>
+        </provider>
     </application>
 </manifest>
