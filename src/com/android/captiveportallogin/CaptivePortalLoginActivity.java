@@ -29,6 +29,7 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
+import android.content.ServiceConnection;
 import android.content.pm.PackageManager.NameNotFoundException;
 import android.graphics.Bitmap;
 import android.net.CaptivePortal;
@@ -48,8 +49,11 @@ import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.IBinder;
+import android.os.Looper;
 import android.os.SystemProperties;
 import android.provider.DeviceConfig;
+import android.provider.DocumentsContract;
 import android.provider.MediaStore;
 import android.text.TextUtils;
 import android.util.ArrayMap;
@@ -72,18 +76,24 @@ import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import androidx.annotation.GuardedBy;
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 import androidx.annotation.StringRes;
 import androidx.annotation.VisibleForTesting;
+import androidx.core.content.FileProvider;
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 
 import com.android.internal.logging.nano.MetricsProto.MetricsEvent;
 
+import java.io.File;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -91,6 +101,8 @@ import java.net.HttpURLConnection;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.net.URLConnection;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.util.Objects;
 import java.util.Random;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -106,7 +118,14 @@ public class CaptivePortalLoginActivity extends Activity {
             "http://connectivitycheck.gstatic.com/generate_204";
     public static final String DISMISS_PORTAL_IN_VALIDATED_NETWORK =
             "dismiss_portal_in_validated_network";
-
+    // This should match the FileProvider authority specified in the app manifest.
+    @VisibleForTesting
+    public static final String FILE_PROVIDER_AUTHORITY =
+            "com.android.captiveportallogin.fileprovider";
+    // This should match the path name in the FileProvider paths XML.
+    @VisibleForTesting
+    static final String FILE_PROVIDER_DOWNLOAD_PATH = "downloads";
+    private static final int NO_DIRECTLY_OPEN_TASK_ID = -1;
     private enum Result {
         DISMISSED(MetricsEvent.ACTION_CAPTIVE_PORTAL_LOGIN_RESULT_DISMISSED),
         UNWANTED(MetricsEvent.ACTION_CAPTIVE_PORTAL_LOGIN_RESULT_UNWANTED),
@@ -141,12 +160,114 @@ public class CaptivePortalLoginActivity extends Activity {
     @GuardedBy("mDownloadRequests")
     private int mNextDownloadRequestId = 1;
 
+    // mDownloadServiceBinder and mExpectedTaskForSpinnerVisibility must be always updated from the
+    // main thread.
+    @VisibleForTesting
+    int mDirectlyOpenId = NO_DIRECTLY_OPEN_TASK_ID;
+    @Nullable
+    private DownloadService.DownloadServiceBinder mDownloadService = null;
+    private final ServiceConnection mDownloadServiceConn = new ServiceConnection() {
+        @Override
+        public void onServiceDisconnected(ComponentName name) {
+            Log.d(TAG, "Download service disconnected");
+            // Service binding is lost. The spinner for the directly open tasks is no longer
+            // needed.
+            setProgressSpinnerVisibility(View.GONE, mDirectlyOpenId);
+        }
+
+        @Override
+        public void onServiceConnected(ComponentName name, IBinder binder) {
+            Log.d(TAG, "Download service connected");
+            mDownloadService = (DownloadService.DownloadServiceBinder) binder;
+            mDownloadService.setProgressCallback(mProgressCallback);
+            maybeStartPendingDownloads();
+        }
+    };
+
+    @VisibleForTesting
+    final DownloadService.ProgressCallback mProgressCallback =
+            new DownloadService.ProgressCallback() {
+        @Override
+        public void onDownloadComplete(Uri inputFile, String mimeType, int downloadId,
+                boolean success) {
+            if (isDirectlyOpen(mimeType) && success) {
+                try {
+                    startActivity(makeDirectlyOpenIntent(inputFile, mimeType));
+                } catch (ActivityNotFoundException e) {
+                    // Delete the directly open file if no activity could handle it. This is
+                    // verified before downloading, so it should only happen when the handling app
+                    // was uninstalled while downloading, which is vanishingly rare. Try to delete
+                    // it in case of the target activity being removed somehow.
+                    Log.wtf(TAG, "No activity could handle " + mimeType + " file.", e);
+                    tryDeleteFile(inputFile);
+                }
+            }
+
+            runOnUiThread(() -> setProgressSpinnerVisibility(View.GONE, downloadId));
+        }
+
+        @Override
+        public void onDownloadAborted(int downloadId, int reason) {
+            if (reason == DownloadService.DOWNLOAD_ABORTED_REASON_FILE_TOO_LARGE) {
+                runOnUiThread(() -> Toast.makeText(CaptivePortalLoginActivity.this,
+                        R.string.file_too_large_cancel_download, Toast.LENGTH_LONG).show());
+            }
+            runOnUiThread(() -> setProgressSpinnerVisibility(View.GONE, downloadId));
+        }
+    };
+
+    private void maybeStartPendingDownloads() {
+        ensureRunningOnMainThread();
+
+        if (mDownloadService == null) return;
+        synchronized (mDownloadRequests) {
+            for (int i = 0; i < mDownloadRequests.size(); i++) {
+                final DownloadRequest req = mDownloadRequests.valueAt(i);
+                if (req.mOutFile == null) continue;
+
+                final int dlId = mDownloadService.requestDownload(mNetwork, mUserAgent, req.mUrl,
+                        req.mFilename, req.mOutFile, getApplicationContext(), req.mMimeType);
+                if (isDirectlyOpen(req.mMimeType)) {
+                    mDirectlyOpenId = dlId;
+                    setProgressSpinnerVisibility(View.VISIBLE, dlId);
+                }
+
+                mDownloadRequests.removeAt(i);
+                i--;
+            }
+        }
+    }
+
+    private static boolean isDirectlyOpen(String mimeType) {
+        return DownloadService.DIRECTLY_OPEN_MIME_TYPES.contains(mimeType);
+    }
+
+    private Intent makeDirectlyOpenIntent(Uri inputFile, String mimeType) {
+        return new Intent(Intent.ACTION_VIEW)
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
+                        | Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                .setDataAndType(inputFile, mimeType);
+    }
+
+    private void tryDeleteFile(@NonNull Uri file) {
+        try {
+            DocumentsContract.deleteDocument(getContentResolver(), file);
+        } catch (FileNotFoundException e) {
+            // Nothing to delete
+            Log.wtf(TAG, file + " not found for deleting");
+        }
+    }
+
     private static final class DownloadRequest {
         final String mUrl;
         final String mFilename;
-        DownloadRequest(String url, String filename) {
+        final String mMimeType;
+        final Uri mOutFile;
+        DownloadRequest(String url, String filename, String mimeType, Uri outFile) {
             mUrl = url;
             mFilename = filename;
+            mMimeType = mimeType;
+            mOutFile = outFile;
         }
     }
 
@@ -246,6 +367,30 @@ public class CaptivePortalLoginActivity extends Activity {
                 webview.reload();
                 mSwipeRefreshLayout.setRefreshing(true);
             });
+
+        maybeDeleteDirectlyOpenFile();
+    }
+
+    private void maybeDeleteDirectlyOpenFile() {
+        // Try to remove the directly open files if exists.
+        final File downloadPath = new File(getFilesDir(), FILE_PROVIDER_DOWNLOAD_PATH);
+        try {
+            deleteRecursively(downloadPath);
+        } catch (IOException e) {
+            Log.d(TAG, "Exception while deleting temp download files", e);
+        }
+    }
+
+    private static boolean deleteRecursively(final File path) throws IOException {
+        if (path.isDirectory()) {
+            final File[] files = path.listFiles();
+            if (files != null) {
+                for (final File child : files) {
+                    deleteRecursively(child);
+                }
+            }
+        }
+        return Files.deleteIfExists(Paths.get(path.toURI()));
     }
 
     @VisibleForTesting
@@ -366,8 +511,48 @@ public class CaptivePortalLoginActivity extends Activity {
     }
 
     @Override
+    public void onStop() {
+        super.onStop();
+        cancelPendingTask();
+    }
+
+    // This must be always called from main thread.
+    private void setProgressSpinnerVisibility(int visibility, int downloadId) {
+        ensureRunningOnMainThread();
+        // Not a candidate task to update the spinner visibility.
+        if (downloadId != mDirectlyOpenId) return;
+
+        getProgressLayout().setVisibility(visibility);
+        if (visibility != View.VISIBLE) {
+            mDirectlyOpenId = NO_DIRECTLY_OPEN_TASK_ID;
+        }
+    }
+
+    @VisibleForTesting
+    void cancelPendingTask() {
+        ensureRunningOnMainThread();
+        if (mDirectlyOpenId != NO_DIRECTLY_OPEN_TASK_ID) {
+            Toast.makeText(this, R.string.cancel_pending_downloads, Toast.LENGTH_SHORT).show();
+            // Remove the pending task for downloading the directly open file.
+            mDownloadService.cancelTask(mDirectlyOpenId);
+        }
+    }
+
+    private void ensureRunningOnMainThread() {
+        if (Looper.getMainLooper().getThread() != Thread.currentThread()) {
+            throw new IllegalStateException(
+                    "Not running on main thread: " + Thread.currentThread().getName());
+        }
+    }
+
+    @Override
     public void onDestroy() {
         super.onDestroy();
+
+        if (mDownloadService != null) {
+            unbindService(mDownloadServiceConn);
+        }
+
         final WebView webview = (WebView) findViewById(R.id.webview);
         if (webview != null) {
             webview.stopLoading();
@@ -412,7 +597,6 @@ public class CaptivePortalLoginActivity extends Activity {
                 Log.e(TAG, "No pending download for request " + requestCode);
                 return;
             }
-            mDownloadRequests.remove(requestCode);
         }
 
         final Uri fileUri = data.getData();
@@ -421,10 +605,9 @@ public class CaptivePortalLoginActivity extends Activity {
             return;
         }
 
-        final Intent downloadIntent = DownloadService.makeDownloadIntent(getApplicationContext(),
-                mNetwork, mUserAgent, pendingRequest.mUrl, pendingRequest.mFilename, fileUri);
-
-        startForegroundService(downloadIntent);
+        mDownloadRequests.put(requestCode, new DownloadRequest(pendingRequest.mUrl,
+                pendingRequest.mFilename, pendingRequest.mMimeType, fileUri));
+        maybeStartPendingDownloads();
     }
 
     private URL getUrl() {
@@ -865,8 +1048,9 @@ public class CaptivePortalLoginActivity extends Activity {
         public void onDownloadStart(String url, String userAgent, String contentDisposition,
                 String mimetype, long contentLength) {
             final String normalizedType = Intent.normalizeMimeType(mimetype);
-            final String displayName = URLUtil.guessFileName(url, contentDisposition,
-                    normalizedType);
+            // TODO: Need to sanitize the file name.
+            final String displayName = URLUtil.guessFileName(
+                    url, contentDisposition, normalizedType);
 
             String guessedMimetype = normalizedType;
             if (TextUtils.isEmpty(guessedMimetype)) {
@@ -879,17 +1063,43 @@ public class CaptivePortalLoginActivity extends Activity {
             Log.d(TAG, String.format("Starting download for %s, type %s with display name %s",
                     url, guessedMimetype, displayName));
 
-            final Intent createFileIntent = DownloadService.makeCreateFileIntent(
-                    guessedMimetype, displayName);
-
             final int requestId;
             // WebView should call onDownloadStart from the UI thread, but to be extra-safe as
             // that is not documented behavior, access the download requests array with a lock.
             synchronized (mDownloadRequests) {
                 requestId = mNextDownloadRequestId++;
-                mDownloadRequests.put(requestId, new DownloadRequest(url, displayName));
+                // Only bind the DownloadService for the firs download. The request is put into
+                // array later, so size == 0 with null mDownloadService means it's the first item.
+                if (mDownloadService == null && mDownloadRequests.size() == 0) {
+                    final Intent serviceIntent =
+                            new Intent(CaptivePortalLoginActivity.this, DownloadService.class);
+                    // To allow downloads to continue while the activity is closed, start service
+                    // with a no-op intent, to make sure the service still gets put into started
+                    // state.
+                    startService(new Intent(getApplicationContext(), DownloadService.class));
+                    bindService(serviceIntent, mDownloadServiceConn, Context.BIND_AUTO_CREATE);
+                }
+            }
+            // Skip file picker for directly open MIME type, such as wifi Passpoint configuration
+            // files. Fallback to generic design if the download process can not start successfully.
+            if (isDirectlyOpen(guessedMimetype)) {
+                try {
+                    startDirectlyOpenDownload(url, displayName, guessedMimetype, requestId);
+                    return;
+                } catch (IOException | ActivityNotFoundException e) {
+                    // Fallthrough to show the file picker
+                    Log.d(TAG, "Unable to do directly open on the file", e);
+                }
             }
 
+            synchronized (mDownloadRequests) {
+                // outFile will be assigned after file be created.
+                mDownloadRequests.put(requestId, new DownloadRequest(url, displayName,
+                        guessedMimetype, null /* outFile */));
+            }
+
+            final Intent createFileIntent = DownloadService.makeCreateFileIntent(
+                    guessedMimetype, displayName);
             try {
                 startActivityForResult(createFileIntent, requestId);
             } catch (ActivityNotFoundException e) {
@@ -900,6 +1110,31 @@ public class CaptivePortalLoginActivity extends Activity {
                 Log.e(TAG, "No document provider found to create download file", e);
             }
         }
+
+        private void startDirectlyOpenDownload(String url, String filename, String mimeType,
+                int requestId) throws ActivityNotFoundException, IOException {
+            final File downloadPath = new File(getFilesDir(), FILE_PROVIDER_DOWNLOAD_PATH);
+            downloadPath.mkdir();
+            final File file = new File(downloadPath.getPath(), filename);
+
+            final Uri uri = FileProvider.getUriForFile(
+                    CaptivePortalLoginActivity.this, FILE_PROVIDER_AUTHORITY, file);
+
+            // Test if there is possible activity to handle this directly open file.
+            final Intent testIntent = makeDirectlyOpenIntent(uri, mimeType);
+            if (getPackageManager().resolveActivity(testIntent, 0 /* flag */) == null) {
+                // No available activity is able to handle this.
+                throw new ActivityNotFoundException("No available activity is able to handle "
+                        + mimeType + " mime type file");
+            }
+
+            file.createNewFile();
+            synchronized (mDownloadRequests) {
+                mDownloadRequests.put(requestId, new DownloadRequest(url, filename, mimeType, uri));
+            }
+
+            maybeStartPendingDownloads();
+        }
     }
 
     private ProgressBar getProgressBar() {
@@ -908,6 +1143,10 @@ public class CaptivePortalLoginActivity extends Activity {
 
     private WebView getWebview() {
         return findViewById(R.id.webview);
+    }
+
+    private FrameLayout getProgressLayout() {
+        return findViewById(R.id.downloading_panel);
     }
 
     private String getHeaderTitle() {
