@@ -47,6 +47,8 @@ import static com.android.testutils.TestNetworkTrackerKt.initTestNetwork;
 import static com.android.testutils.TestPermissionUtil.runAsShell;
 
 import static junit.framework.Assert.assertEquals;
+import static junit.framework.Assert.assertNotNull;
+import static junit.framework.Assert.assertNull;
 
 import static org.hamcrest.CoreMatchers.not;
 import static org.junit.Assert.assertFalse;
@@ -111,6 +113,7 @@ import org.mockito.MockitoSession;
 import org.mockito.Spy;
 import org.mockito.quality.Strictness;
 
+import java.io.File;
 import java.io.IOException;
 import java.lang.reflect.Method;
 import java.net.ServerSocket;
@@ -869,6 +872,29 @@ public class CaptivePortalLoginActivityTest {
                     }
                 });
         return messageFuture;
+    }
+
+    @Test
+    public void testDirectlyOpen_onCreateDeleteFile() throws Exception {
+        final String linkIdDownload = "download";
+        final HttpServer server = prepareTestDirectlyOpen(linkIdDownload, "dl",
+                "test.wificonfig", "application/x-wifi-config", Uri.parse("content://mockdata"));
+        final UiObject spinner = getUiSpinner();
+        final File downloadPath = new File(getInstrumentation().getContext().getFilesDir(),
+                CaptivePortalLoginActivity.FILE_PROVIDER_DOWNLOAD_PATH);
+
+        assertNull(downloadPath.listFiles());
+
+        onWebView().withElement(findElement(Locator.ID, linkIdDownload)).perform(webClick());
+        assertTrue(spinner.exists());
+
+        // The download file should be created.
+        assertNotNull(downloadPath.listFiles());
+
+        mActivityScenario.recreate();
+        // OnCreate should clean the previous created files.
+        assertNull(downloadPath.listFiles());
+        server.stop();
     }
 
     @Test

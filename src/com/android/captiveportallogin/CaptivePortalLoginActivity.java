@@ -123,7 +123,8 @@ public class CaptivePortalLoginActivity extends Activity {
     public static final String FILE_PROVIDER_AUTHORITY =
             "com.android.captiveportallogin.fileprovider";
     // This should match the path name in the FileProvider paths XML.
-    private static final String FILE_PROVIDER_DOWNLOAD_PATH = "downloads";
+    @VisibleForTesting
+    static final String FILE_PROVIDER_DOWNLOAD_PATH = "downloads";
     private static final int NO_DIRECTLY_OPEN_TASK_ID = -1;
     private enum Result {
         DISMISSED(MetricsEvent.ACTION_CAPTIVE_PORTAL_LOGIN_RESULT_DISMISSED),
