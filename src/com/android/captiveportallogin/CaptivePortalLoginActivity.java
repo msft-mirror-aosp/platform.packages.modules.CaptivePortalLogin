@@ -20,6 +20,8 @@ import static android.net.ConnectivityManager.EXTRA_CAPTIVE_PORTAL_PROBE_SPEC;
 import static android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED;
 import static android.provider.DeviceConfig.NAMESPACE_CONNECTIVITY;
 
+import static com.android.captiveportallogin.DownloadService.isDirectlyOpenType;
+
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.Application;
@@ -160,8 +162,7 @@ public class CaptivePortalLoginActivity extends Activity {
     @GuardedBy("mDownloadRequests")
     private int mNextDownloadRequestId = 1;
 
-    // mDownloadServiceBinder and mExpectedTaskForSpinnerVisibility must be always updated from the
-    // main thread.
+    // mDownloadService and mDirectlyOpenId must be always updated from the main thread.
     @VisibleForTesting
     int mDirectlyOpenId = NO_DIRECTLY_OPEN_TASK_ID;
     @Nullable
@@ -170,9 +171,10 @@ public class CaptivePortalLoginActivity extends Activity {
         @Override
         public void onServiceDisconnected(ComponentName name) {
             Log.d(TAG, "Download service disconnected");
+            mDownloadService = null;
             // Service binding is lost. The spinner for the directly open tasks is no longer
             // needed.
-            setProgressSpinnerVisibility(View.GONE, mDirectlyOpenId);
+            setProgressSpinnerVisibility(View.GONE);
         }
 
         @Override
@@ -190,7 +192,7 @@ public class CaptivePortalLoginActivity extends Activity {
         @Override
         public void onDownloadComplete(Uri inputFile, String mimeType, int downloadId,
                 boolean success) {
-            if (isDirectlyOpen(mimeType) && success) {
+            if (isDirectlyOpenType(mimeType) && success) {
                 try {
                     startActivity(makeDirectlyOpenIntent(inputFile, mimeType));
                 } catch (ActivityNotFoundException e) {
@@ -199,11 +201,11 @@ public class CaptivePortalLoginActivity extends Activity {
                     // was uninstalled while downloading, which is vanishingly rare. Try to delete
                     // it in case of the target activity being removed somehow.
                     Log.wtf(TAG, "No activity could handle " + mimeType + " file.", e);
-                    tryDeleteFile(inputFile);
+                    runOnUiThread(() -> tryDeleteFile(inputFile));
                 }
             }
 
-            runOnUiThread(() -> setProgressSpinnerVisibility(View.GONE, downloadId));
+            verifyDownloadIdAndMaybeHideSpinner(downloadId);
         }
 
         @Override
@@ -212,7 +214,20 @@ public class CaptivePortalLoginActivity extends Activity {
                 runOnUiThread(() -> Toast.makeText(CaptivePortalLoginActivity.this,
                         R.string.file_too_large_cancel_download, Toast.LENGTH_LONG).show());
             }
-            runOnUiThread(() -> setProgressSpinnerVisibility(View.GONE, downloadId));
+
+            verifyDownloadIdAndMaybeHideSpinner(downloadId);
+        }
+
+        private void verifyDownloadIdAndMaybeHideSpinner(int id) {
+            // Hide the spinner when the task completed signal for the target task is received.
+            //
+            // mDirectlyOpenId will not be updated until the existing directly open task is
+            // completed or the connection to the DownloadService is lost. If the id is updated to
+            // NO_DIRECTLY_OPEN_TASK_ID because of the loss of connection to DownloadService, the
+            // spinner should be already hidden. Receiving relevant callback is ignorable.
+            runOnUiThread(() -> {
+                if (mDirectlyOpenId == id) setProgressSpinnerVisibility(View.GONE);
+            });
         }
     };
 
@@ -227,19 +242,15 @@ public class CaptivePortalLoginActivity extends Activity {
 
                 final int dlId = mDownloadService.requestDownload(mNetwork, mUserAgent, req.mUrl,
                         req.mFilename, req.mOutFile, getApplicationContext(), req.mMimeType);
-                if (isDirectlyOpen(req.mMimeType)) {
+                if (isDirectlyOpenType(req.mMimeType)) {
                     mDirectlyOpenId = dlId;
-                    setProgressSpinnerVisibility(View.VISIBLE, dlId);
+                    setProgressSpinnerVisibility(View.VISIBLE);
                 }
 
                 mDownloadRequests.removeAt(i);
                 i--;
             }
         }
-    }
-
-    private static boolean isDirectlyOpen(String mimeType) {
-        return DownloadService.DIRECTLY_OPEN_MIME_TYPES.contains(mimeType);
     }
 
     private Intent makeDirectlyOpenIntent(Uri inputFile, String mimeType) {
@@ -250,6 +261,7 @@ public class CaptivePortalLoginActivity extends Activity {
     }
 
     private void tryDeleteFile(@NonNull Uri file) {
+        ensureRunningOnMainThread();
         try {
             DocumentsContract.deleteDocument(getContentResolver(), file);
         } catch (FileNotFoundException e) {
@@ -259,11 +271,15 @@ public class CaptivePortalLoginActivity extends Activity {
     }
 
     private static final class DownloadRequest {
-        final String mUrl;
-        final String mFilename;
-        final String mMimeType;
-        final Uri mOutFile;
-        DownloadRequest(String url, String filename, String mimeType, Uri outFile) {
+        @NonNull final String mUrl;
+        @NonNull final String mFilename;
+        @NonNull final String mMimeType;
+        // mOutFile is null for requests where the device is currently asking the user to pick a
+        // place to put the file. When the user has picked the file name, the request will be
+        // replaced by a new one with the correct file name in onActivityResult.
+        @Nullable final Uri mOutFile;
+        DownloadRequest(@NonNull String url, @NonNull String filename, @NonNull String mimeType,
+                @Nullable Uri outFile) {
             mUrl = url;
             mFilename = filename;
             mMimeType = mimeType;
@@ -517,10 +533,8 @@ public class CaptivePortalLoginActivity extends Activity {
     }
 
     // This must be always called from main thread.
-    private void setProgressSpinnerVisibility(int visibility, int downloadId) {
+    private void setProgressSpinnerVisibility(int visibility) {
         ensureRunningOnMainThread();
-        // Not a candidate task to update the spinner visibility.
-        if (downloadId != mDirectlyOpenId) return;
 
         getProgressLayout().setVisibility(visibility);
         if (visibility != View.VISIBLE) {
@@ -605,8 +619,11 @@ public class CaptivePortalLoginActivity extends Activity {
             return;
         }
 
-        mDownloadRequests.put(requestCode, new DownloadRequest(pendingRequest.mUrl,
-                pendingRequest.mFilename, pendingRequest.mMimeType, fileUri));
+        synchronized (mDownloadRequests) {
+            // Replace the pending request with file uri in mDownloadRequests.
+            mDownloadRequests.put(requestCode, new DownloadRequest(pendingRequest.mUrl,
+                    pendingRequest.mFilename, pendingRequest.mMimeType, fileUri));
+        }
         maybeStartPendingDownloads();
     }
 
@@ -1068,7 +1085,7 @@ public class CaptivePortalLoginActivity extends Activity {
             // that is not documented behavior, access the download requests array with a lock.
             synchronized (mDownloadRequests) {
                 requestId = mNextDownloadRequestId++;
-                // Only bind the DownloadService for the firs download. The request is put into
+                // Only bind the DownloadService for the first download. The request is put into
                 // array later, so size == 0 with null mDownloadService means it's the first item.
                 if (mDownloadService == null && mDownloadRequests.size() == 0) {
                     final Intent serviceIntent =
@@ -1082,7 +1099,7 @@ public class CaptivePortalLoginActivity extends Activity {
             }
             // Skip file picker for directly open MIME type, such as wifi Passpoint configuration
             // files. Fallback to generic design if the download process can not start successfully.
-            if (isDirectlyOpen(guessedMimetype)) {
+            if (isDirectlyOpenType(guessedMimetype)) {
                 try {
                     startDirectlyOpenDownload(url, displayName, guessedMimetype, requestId);
                     return;
@@ -1093,7 +1110,7 @@ public class CaptivePortalLoginActivity extends Activity {
             }
 
             synchronized (mDownloadRequests) {
-                // outFile will be assigned after file be created.
+                // outFile will be assigned after file is created.
                 mDownloadRequests.put(requestId, new DownloadRequest(url, displayName,
                         guessedMimetype, null /* outFile */));
             }
@@ -1113,8 +1130,17 @@ public class CaptivePortalLoginActivity extends Activity {
 
         private void startDirectlyOpenDownload(String url, String filename, String mimeType,
                 int requestId) throws ActivityNotFoundException, IOException {
+            ensureRunningOnMainThread();
+            // Reject another directly open task if there is one task in progress. Using
+            // mDirectlyOpenId here is ok because mDirectlyOpenId will not be updated to
+            // non-NO_DIRECTLY_OPEN_TASK_ID until the new task is started.
+            if (mDirectlyOpenId != NO_DIRECTLY_OPEN_TASK_ID) {
+                Log.d(TAG, "Existing directly open task is in progress. Ignore this.");
+                return;
+            }
+
             final File downloadPath = new File(getFilesDir(), FILE_PROVIDER_DOWNLOAD_PATH);
-            downloadPath.mkdir();
+            downloadPath.mkdirs();
             final File file = new File(downloadPath.getPath(), filename);
 
             final Uri uri = FileProvider.getUriForFile(
