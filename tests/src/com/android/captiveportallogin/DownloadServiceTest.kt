@@ -27,7 +27,6 @@ import android.os.Bundle
 import android.os.IBinder
 import android.os.Parcel
 import android.os.Parcelable
-import android.provider.DeviceConfig
 import android.webkit.MimeTypeMap
 import android.widget.TextView
 import androidx.core.content.FileProvider
@@ -42,28 +41,11 @@ import androidx.test.uiautomator.UiObject
 import androidx.test.uiautomator.UiScrollable
 import androidx.test.uiautomator.UiSelector
 import androidx.test.uiautomator.Until
-import com.android.captiveportallogin.DownloadService.DEFAULT_MAX_DIRECTLY_OPEN_CONTENT_LENGTH
-import com.android.captiveportallogin.DownloadService.DIRECTLY_OPEN_SIZE_LIMIT
 import com.android.captiveportallogin.DownloadService.DOWNLOAD_ABORTED_REASON_FILE_TOO_LARGE
 import com.android.captiveportallogin.DownloadService.DownloadServiceBinder
-import com.android.captiveportallogin.DownloadService.NAMESPACE_CAPTIVEPORTALLOGIN
 import com.android.captiveportallogin.DownloadService.ProgressCallback
-import com.android.dx.mockito.inline.extended.ExtendedMockito
 import com.android.dx.mockito.inline.extended.ExtendedMockito.doReturn
 import com.android.dx.mockito.inline.extended.ExtendedMockito.spyOn
-import org.junit.After
-import org.junit.Assert.assertNotNull
-import org.junit.Before
-import org.junit.BeforeClass
-import org.junit.Rule
-import org.junit.Test
-import org.junit.runner.RunWith
-import org.mockito.Mockito.mock
-import org.mockito.Mockito.timeout
-import org.mockito.Mockito.verify
-import org.mockito.MockitoAnnotations
-import org.mockito.MockitoSession
-import org.mockito.quality.Strictness
 import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.FileInputStream
@@ -82,6 +64,15 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 import kotlin.test.fail
+import org.junit.Assert.assertNotNull
+import org.junit.Before
+import org.junit.BeforeClass
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.mockito.Mockito.mock
+import org.mockito.Mockito.timeout
+import org.mockito.Mockito.verify
 
 private val TEST_FILESIZE = 1_000_000 // 1MB
 private val TEST_USERAGENT = "Test UserAgent"
@@ -136,8 +127,6 @@ class DownloadServiceTest {
     private val context by lazy { getInstrumentation().context }
     private val resources by lazy { context.resources }
     private val device by lazy { UiDevice.getInstance(getInstrumentation()) }
-
-    private lateinit var session: MockitoSession
 
     // Test network that can be parceled in intents while mocking the connection
     class TestNetwork(private val privateDnsBypass: Boolean = false)
@@ -239,34 +228,11 @@ class DownloadServiceTest {
 
     @Before
     fun setUp() {
-        MockitoAnnotations.initMocks(this)
-        session = ExtendedMockito.mockitoSession()
-                .spyStatic(DeviceConfig::class.java)
-                .strictness(Strictness.WARN)
-                .startMocking()
-
         TestNetwork.sTestConnection = connection
-        setMaxDirectlyOpenFileSize(TEST_FILESIZE + 100L)
         doReturn(200).`when`(connection).responseCode
         doReturn(TEST_FILESIZE.toLong()).`when`(connection).contentLengthLong
 
         ActivityScenario.launch(RequestDismissKeyguardActivity::class.java)
-    }
-
-    @After
-    fun tearDown() {
-        session.finishMocking()
-    }
-
-    private fun setMaxDirectlyOpenFileSize(
-        size: Long = DEFAULT_MAX_DIRECTLY_OPEN_CONTENT_LENGTH
-    ) {
-        doReturn(size).`when` {
-            DeviceConfig.getLong(
-                    NAMESPACE_CAPTIVEPORTALLOGIN,
-                    DIRECTLY_OPEN_SIZE_LIMIT,
-                    DEFAULT_MAX_DIRECTLY_OPEN_CONTENT_LENGTH)
-        }
     }
 
     /**
@@ -398,8 +364,6 @@ class DownloadServiceTest {
     fun testDirectlyOpenMimeType_fileSizeTooLarge() {
         val inputStream1 = TestInputStream()
         doReturn(inputStream1).`when`(connection).inputStream
-        // Set size limit lower than the test file
-        setMaxDirectlyOpenFileSize(10)
         getInstrumentation().waitForIdleSync()
         val outCfgFile = createTestDirectlyOpenFile()
         val downloadAbortedFuture = CompletableFuture<Boolean>()
@@ -411,7 +375,8 @@ class DownloadServiceTest {
             val binder = bindService(mTestServiceConn)
             startDownloadTask(binder, outCfgFile, TEST_WIFI_CONFIG_TYPE)
             inputStream1.setAvailable(TEST_FILESIZE)
-            // Verify callback called when the download is complete.
+            // File size 1_000_000 is bigger than the limit(100_000). Download is expected to be
+            // aborted. Verify callback called when the download is complete.
             assertTrue(downloadAbortedFuture.get(TEST_TIMEOUT_MS, MILLISECONDS))
         } finally {
             mServiceRule.unbindService()
