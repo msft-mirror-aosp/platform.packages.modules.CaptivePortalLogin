@@ -883,7 +883,7 @@ public class CaptivePortalLoginActivityTest {
         assertNull(downloadPath.listFiles());
 
         onWebView().withElement(findElement(Locator.ID, linkIdDownload)).perform(webClick());
-        assertTrue(spinner.exists());
+        assertTrue(spinner.waitForExists(TEST_TIMEOUT_MS));
 
         // The download file should be created.
         assertNotNull(downloadPath.listFiles());
