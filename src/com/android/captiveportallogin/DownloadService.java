@@ -33,7 +33,6 @@ import android.net.Uri;
 import android.os.Binder;
 import android.os.IBinder;
 import android.os.ParcelFileDescriptor;
-import android.provider.DeviceConfig;
 import android.provider.DocumentsContract;
 import android.util.Log;
 
@@ -52,10 +51,9 @@ import java.lang.annotation.RetentionPolicy;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLConnection;
-import java.util.Arrays;
-import java.util.Collections;
+import java.util.HashMap;
 import java.util.LinkedList;
-import java.util.List;
+import java.util.Objects;
 import java.util.Queue;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -81,18 +79,6 @@ public class DownloadService extends Service {
     private static final long MAX_PROGRESS_UPDATE_RATE_MS = 500L;
     private static final long CONTENT_LENGTH_UNKNOWN = -1L;
 
-    // TODO: Refer to DeviceConfig API when the current sdk dumps to T.
-    static final String NAMESPACE_CAPTIVEPORTALLOGIN = "captive_portal_login";
-
-    static final List<String> DIRECTLY_OPEN_MIME_TYPES =
-            Collections.unmodifiableList(Arrays.asList("application/x-wifi-config"));
-    // DeviceConfig for directly open content length limit
-    @VisibleForTesting
-    static final long DEFAULT_MAX_DIRECTLY_OPEN_CONTENT_LENGTH = 100_000L;
-    @VisibleForTesting
-    static final String DIRECTLY_OPEN_SIZE_LIMIT = "directly_open_size_limit";
-    static final int UNSPECIFIED_TASK_ID = 0;
-
     static final int DOWNLOAD_ABORTED_REASON_FILE_TOO_LARGE = 1;
     @IntDef(value = { DOWNLOAD_ABORTED_REASON_FILE_TOO_LARGE })
     @Retention(RetentionPolicy.SOURCE)
@@ -115,6 +101,14 @@ public class DownloadService extends Service {
     // allow cancelling current downloads when the user tapped the cancel button, but not subsequent
     // download jobs.
     private final AtomicInteger mNextDownloadId = new AtomicInteger(1);
+
+    // Key is the directly open MIME type with an int as it max length bytes. The value is an int is
+    // enough since it's no point if > 2**31.
+    private static final HashMap<String, Integer> sDirectlyOpenMimeType =
+            new HashMap<String, Integer>();
+    static {
+        sDirectlyOpenMimeType.put("application/x-wifi-config", 100_000);
+    }
 
     private static class DownloadTask {
         private final int mId;
@@ -362,7 +356,7 @@ public class DownloadService extends Service {
         private void updateNotification(@NonNull NotificationManager nm, int eventId,
                 String mimeType, @NonNull Notification notification) {
             // Skip showing the download notification for the directly open mime types.
-            if (eventId == NOTE_DOWNLOAD_DONE && DIRECTLY_OPEN_MIME_TYPES.contains(mimeType)) {
+            if (eventId == NOTE_DOWNLOAD_DONE && isDirectlyOpenType(mimeType)) {
                 return;
             }
             nm.notify(eventId, notification);
@@ -380,9 +374,9 @@ public class DownloadService extends Service {
             long allRead = 0L;
             final long maxRead = contentLength == CONTENT_LENGTH_UNKNOWN
                     ? Long.MAX_VALUE : contentLength;
-            final long maxDirectlyOpenLen = DeviceConfig.getLong(NAMESPACE_CAPTIVEPORTALLOGIN,
-                    DIRECTLY_OPEN_SIZE_LIMIT, DEFAULT_MAX_DIRECTLY_OPEN_CONTENT_LENGTH);
-            final boolean isDirectlyOpenType = DIRECTLY_OPEN_MIME_TYPES.contains(task.mMimeType);
+            final boolean isDirectlyOpenType = isDirectlyOpenType(task.mMimeType);
+            final int maxDirectlyOpenLen = Objects.requireNonNullElse(
+                    sDirectlyOpenMimeType.get(task.mMimeType), Integer.MAX_VALUE);
             int lastProgress = -1;
             long lastUpdateTime = -1L;
             while (allRead < maxRead) {
@@ -464,6 +458,10 @@ public class DownloadService extends Service {
 
             return true;
         }
+    }
+
+    static boolean isDirectlyOpenType(String type) {
+        return sDirectlyOpenMimeType.get(type) != null;
     }
 
     @NonNull

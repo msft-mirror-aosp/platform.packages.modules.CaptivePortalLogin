@@ -37,10 +37,7 @@ import static androidx.test.espresso.web.webdriver.DriverAtoms.findElement;
 import static androidx.test.espresso.web.webdriver.DriverAtoms.webClick;
 import static androidx.test.platform.app.InstrumentationRegistry.getInstrumentation;
 
-import static com.android.captiveportallogin.DownloadService.DEFAULT_MAX_DIRECTLY_OPEN_CONTENT_LENGTH;
-import static com.android.captiveportallogin.DownloadService.DIRECTLY_OPEN_SIZE_LIMIT;
 import static com.android.captiveportallogin.DownloadService.DOWNLOAD_ABORTED_REASON_FILE_TOO_LARGE;
-import static com.android.captiveportallogin.DownloadService.NAMESPACE_CAPTIVEPORTALLOGIN;
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.doReturn;
 import static com.android.dx.mockito.inline.extended.ExtendedMockito.mockitoSession;
 import static com.android.testutils.TestNetworkTrackerKt.initTestNetwork;
@@ -143,6 +140,7 @@ public class CaptivePortalLoginActivityTest {
     private static final String TEST_USERAGENT = "Test/42.0 Unit-test";
     private static final String TEST_FRIENDLY_NAME = "Network friendly name";
     private static final String TEST_PORTAL_HOSTNAME = "localhost";
+    private static final String TEST_WIFI_CONFIG_TYPE = "application/x-wifi-config";
     private ActivityScenario<InstrumentedCaptivePortalLoginActivity> mActivityScenario;
     private MockitoSession mSession;
     private Network mNetwork = new Network(TEST_NETID);
@@ -294,7 +292,6 @@ public class CaptivePortalLoginActivityTest {
                 .strictness(Strictness.WARN)
                 .startMocking();
         setDismissPortalInValidatedNetwork(true);
-        setDirectlyOpenSizeLimit(DEFAULT_MAX_DIRECTLY_OPEN_CONTENT_LENGTH);
         // Use a real (but test) network for the application. The application will pass this
         // network to ConnectivityManager#bindProcessToNetwork, so it needs to be a real, existing
         // network on the device but otherwise has no functional use at all. The http server set up
@@ -878,7 +875,7 @@ public class CaptivePortalLoginActivityTest {
     public void testDirectlyOpen_onCreateDeleteFile() throws Exception {
         final String linkIdDownload = "download";
         final HttpServer server = prepareTestDirectlyOpen(linkIdDownload, "dl",
-                "test.wificonfig", "application/x-wifi-config", Uri.parse("content://mockdata"));
+                "test.wificonfig", TEST_WIFI_CONFIG_TYPE, Uri.parse("content://mockdata"));
         final UiObject spinner = getUiSpinner();
         final File downloadPath = new File(getInstrumentation().getContext().getFilesDir(),
                 CaptivePortalLoginActivity.FILE_PROVIDER_DOWNLOAD_PATH);
@@ -886,7 +883,7 @@ public class CaptivePortalLoginActivityTest {
         assertNull(downloadPath.listFiles());
 
         onWebView().withElement(findElement(Locator.ID, linkIdDownload)).perform(webClick());
-        assertTrue(spinner.exists());
+        assertTrue(spinner.waitForExists(TEST_TIMEOUT_MS));
 
         // The download file should be created.
         assertNotNull(downloadPath.listFiles());
@@ -919,7 +916,7 @@ public class CaptivePortalLoginActivityTest {
                 R.string.cancel_pending_downloads);
 
         final HttpServer server = prepareTestDirectlyOpen(linkIdDownload, "dl",
-                "test.wificonfig", "application/x-wifi-config", Uri.parse("content://mockdata"));
+                "test.wificonfig", TEST_WIFI_CONFIG_TYPE, Uri.parse("content://mockdata"));
         onWebView().withElement(findElement(Locator.ID, linkIdDownload)).perform(webClick());
 
         final UiObject spinner = getUiSpinner();
@@ -935,7 +932,7 @@ public class CaptivePortalLoginActivityTest {
     public void testDirectlyOpen_cancelPendingTask() throws Exception {
         final String linkIdDownload = "download";
         final Uri outFile = Uri.parse("content://mockdata");
-        final String mimeType = "application/x-wifi-config";
+        final String mimeType = TEST_WIFI_CONFIG_TYPE;
         final int requestId = 123;
         final HttpServer server = prepareTestDirectlyOpen(linkIdDownload, "dl",
                 "test.wificonfig", mimeType, outFile);
@@ -963,7 +960,7 @@ public class CaptivePortalLoginActivityTest {
     @Test
     public void testDirectlyOpen_successfullyDownload() throws Exception {
         final String linkIdDownload = "download";
-        final String mimeType = "application/x-wifi-config";
+        final String mimeType = TEST_WIFI_CONFIG_TYPE;
         final String filename = "test.wificonfig";
         final Uri mockFile = Uri.parse("content://mockdata");
         final Uri otherFile = Uri.parse("content://otherdata");
@@ -1002,11 +999,5 @@ public class CaptivePortalLoginActivityTest {
         assertTrue(spinner.waitUntilGone(TEST_TIMEOUT_MS));
 
         server.stop();
-    }
-
-    private void setDirectlyOpenSizeLimit(long size) {
-        doReturn(size).when(() -> DeviceConfig.getLong(
-                NAMESPACE_CAPTIVEPORTALLOGIN,
-                DIRECTLY_OPEN_SIZE_LIMIT, DEFAULT_MAX_DIRECTLY_OPEN_CONTENT_LENGTH));
     }
 }
