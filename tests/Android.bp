@@ -24,8 +24,8 @@ android_test {
     srcs: ["src/**/*.java", "src/**/*.kt"],
     platform_apis: true,
     min_sdk_version: "29",
-    target_sdk_version: "30", // Keep in sync with CaptivePortalLogin
-    test_suites: ["general-tests"],
+    target_sdk_version: "31", // Keep in sync with CaptivePortalLogin
+    test_suites: ["general-tests", "mts-networking"],
     test_mainline_modules: ["CaptivePortalLoginGoogle.apk+NetworkStackGoogle.apk+com.google.android.resolv.apex+com.google.android.tethering.apex"],
 
     static_libs: [
