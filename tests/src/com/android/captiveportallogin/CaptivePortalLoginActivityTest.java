@@ -865,7 +865,9 @@ public class CaptivePortalLoginActivityTest {
                             return;
                         }
                         final String msg = (String) event.getText().get(0);
-                        if (Toast.class.getName().equals(event.getClassName())
+                        // The event class name in older SDK platform will be
+                        // "android.widget.Toast$TN" instead of "android.widget.Toast".
+                        if (event.getClassName().toString().contains(Toast.class.getName())
                                 && expectedMsg.equals(msg)) {
                             messageFuture.complete(true);
                         }
