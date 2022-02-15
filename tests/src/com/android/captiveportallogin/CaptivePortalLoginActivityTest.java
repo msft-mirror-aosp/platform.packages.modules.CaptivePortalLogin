@@ -333,6 +333,7 @@ public class CaptivePortalLoginActivityTest {
             // https://github.com/android/android-test/issues/676 is fixed
             mActivityScenario.close();
             Intents.release();
+            getInstrumentation().getUiAutomation().dropShellPermissionIdentity();
         }
         getInstrumentation().getUiAutomation().setOnAccessibilityEventListener(null);
         getInstrumentation().getContext().getSystemService(ConnectivityManager.class)
@@ -354,6 +355,8 @@ public class CaptivePortalLoginActivityTest {
                         .putExtra(EXTRA_CAPTIVE_PORTAL_USER_AGENT, TEST_USERAGENT)
                         .putExtra(EXTRA_CAPTIVE_PORTAL, new MockCaptivePortal()));
         mActivityScenario.onActivity(activity -> {
+            getInstrumentation().getUiAutomation().adoptShellPermissionIdentity(
+                    android.Manifest.permission.POST_NOTIFICATIONS);
             ctx.getSystemService(KeyguardManager.class).requestDismissKeyguard(activity, null);
             // Dismiss dialogs or notification shade, so the test can interact with the activity.
             activity.sendBroadcast(new Intent(Intent.ACTION_CLOSE_SYSTEM_DIALOGS));
@@ -862,7 +865,9 @@ public class CaptivePortalLoginActivityTest {
                             return;
                         }
                         final String msg = (String) event.getText().get(0);
-                        if (Toast.class.getName().equals(event.getClassName())
+                        // The event class name in older SDK platform will be
+                        // "android.widget.Toast$TN" instead of "android.widget.Toast".
+                        if (event.getClassName().toString().contains(Toast.class.getName())
                                 && expectedMsg.equals(msg)) {
                             messageFuture.complete(true);
                         }
@@ -883,7 +888,7 @@ public class CaptivePortalLoginActivityTest {
         assertNull(downloadPath.listFiles());
 
         onWebView().withElement(findElement(Locator.ID, linkIdDownload)).perform(webClick());
-        assertTrue(spinner.exists());
+        assertTrue(spinner.waitForExists(TEST_TIMEOUT_MS));
 
         // The download file should be created.
         assertNotNull(downloadPath.listFiles());
