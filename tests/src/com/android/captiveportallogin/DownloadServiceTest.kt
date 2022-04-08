@@ -54,6 +54,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLConnection
 import java.nio.charset.StandardCharsets
+import java.text.NumberFormat
 import java.util.concurrent.SynchronousQueue
 import java.util.concurrent.TimeUnit.MILLISECONDS
 import kotlin.math.min
@@ -286,6 +287,10 @@ class DownloadServiceTest {
         assertEquals(0, TEST_FILESIZE % 100)
         assertTrue(TEST_FILESIZE / 100 > 0)
         inputStream1.setAvailable(TEST_FILESIZE / 100)
+
+        // 1% progress should be shown in the notification
+        val progressText = NumberFormat.getPercentInstance().format(.01f)
+        findNotification(UiSelector().textContains(progressText))
 
         // Setup the connection for the next download with indeterminate progress
         val inputStream2 = TestInputStream()
