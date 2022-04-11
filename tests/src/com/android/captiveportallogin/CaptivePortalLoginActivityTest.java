@@ -523,6 +523,16 @@ public class CaptivePortalLoginActivityTest {
                 CaptivePortalLoginActivity.DISMISS_PORTAL_IN_VALIDATED_NETWORK, 0 /* default */));
     }
 
+    void waitForDestroyedState() throws Exception {
+        final long startTimeMs = System.currentTimeMillis();
+        long currentTimeMs = startTimeMs;
+        while (mActivityScenario.getState() != DESTROYED
+                && (currentTimeMs - startTimeMs) < TEST_TIMEOUT_MS) {
+            Thread.sleep(50);
+            currentTimeMs = System.currentTimeMillis();
+        }
+    }
+
     @Test
     public void testNetworkCapabilitiesUpdate() throws Exception {
         initActivity(TEST_URL);
@@ -533,6 +543,11 @@ public class CaptivePortalLoginActivityTest {
         // NetworkCapabilities updates w/ NET_CAPABILITY_VALIDATED.
         nc.setCapability(NET_CAPABILITY_VALIDATED, true);
         notifyValidatedChangedAndDismissed(nc);
+
+        // Workaround to deflake the test. The problem may be caused by a race with lock inside
+        // InstrumentationActivityInvoker.
+        // TODO: Remove it once https://github.com/android/android-test/issues/676 is fixed.
+        waitForDestroyedState();
     }
 
     @Test
@@ -547,6 +562,11 @@ public class CaptivePortalLoginActivityTest {
         // Enable flag. Auto-dismissed.
         setDismissPortalInValidatedNetwork(true);
         notifyValidatedChangedAndDismissed(nc);
+
+        // Workaround to deflake the test. The problem may be caused by a race with lock inside
+        // InstrumentationActivityInvoker.
+        // TODO: Remove it once https://github.com/android/android-test/issues/676 is fixed.
+        waitForDestroyedState();
     }
 
     private HttpServer runCustomSchemeTest(String linkUri) throws Exception {
