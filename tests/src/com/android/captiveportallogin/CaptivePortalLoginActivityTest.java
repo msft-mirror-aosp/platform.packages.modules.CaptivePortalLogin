@@ -333,6 +333,7 @@ public class CaptivePortalLoginActivityTest {
             // https://github.com/android/android-test/issues/676 is fixed
             mActivityScenario.close();
             Intents.release();
+            getInstrumentation().getUiAutomation().dropShellPermissionIdentity();
         }
         getInstrumentation().getUiAutomation().setOnAccessibilityEventListener(null);
         getInstrumentation().getContext().getSystemService(ConnectivityManager.class)
@@ -354,6 +355,8 @@ public class CaptivePortalLoginActivityTest {
                         .putExtra(EXTRA_CAPTIVE_PORTAL_USER_AGENT, TEST_USERAGENT)
                         .putExtra(EXTRA_CAPTIVE_PORTAL, new MockCaptivePortal()));
         mActivityScenario.onActivity(activity -> {
+            getInstrumentation().getUiAutomation().adoptShellPermissionIdentity(
+                    android.Manifest.permission.POST_NOTIFICATIONS);
             ctx.getSystemService(KeyguardManager.class).requestDismissKeyguard(activity, null);
             // Dismiss dialogs or notification shade, so the test can interact with the activity.
             activity.sendBroadcast(new Intent(Intent.ACTION_CLOSE_SYSTEM_DIALOGS));
@@ -523,6 +526,16 @@ public class CaptivePortalLoginActivityTest {
                 CaptivePortalLoginActivity.DISMISS_PORTAL_IN_VALIDATED_NETWORK, 0 /* default */));
     }
 
+    void waitForDestroyedState() throws Exception {
+        final long startTimeMs = System.currentTimeMillis();
+        long currentTimeMs = startTimeMs;
+        while (mActivityScenario.getState() != DESTROYED
+                && (currentTimeMs - startTimeMs) < TEST_TIMEOUT_MS) {
+            Thread.sleep(50);
+            currentTimeMs = System.currentTimeMillis();
+        }
+    }
+
     @Test
     public void testNetworkCapabilitiesUpdate() throws Exception {
         initActivity(TEST_URL);
@@ -533,6 +546,11 @@ public class CaptivePortalLoginActivityTest {
         // NetworkCapabilities updates w/ NET_CAPABILITY_VALIDATED.
         nc.setCapability(NET_CAPABILITY_VALIDATED, true);
         notifyValidatedChangedAndDismissed(nc);
+
+        // Workaround to deflake the test. The problem may be caused by a race with lock inside
+        // InstrumentationActivityInvoker.
+        // TODO: Remove it once https://github.com/android/android-test/issues/676 is fixed.
+        waitForDestroyedState();
     }
 
     @Test
@@ -547,6 +565,11 @@ public class CaptivePortalLoginActivityTest {
         // Enable flag. Auto-dismissed.
         setDismissPortalInValidatedNetwork(true);
         notifyValidatedChangedAndDismissed(nc);
+
+        // Workaround to deflake the test. The problem may be caused by a race with lock inside
+        // InstrumentationActivityInvoker.
+        // TODO: Remove it once https://github.com/android/android-test/issues/676 is fixed.
+        waitForDestroyedState();
     }
 
     private HttpServer runCustomSchemeTest(String linkUri) throws Exception {
@@ -862,7 +885,9 @@ public class CaptivePortalLoginActivityTest {
                             return;
                         }
                         final String msg = (String) event.getText().get(0);
-                        if (Toast.class.getName().equals(event.getClassName())
+                        // The event class name in older SDK platform will be
+                        // "android.widget.Toast$TN" instead of "android.widget.Toast".
+                        if (event.getClassName().toString().contains(Toast.class.getName())
                                 && expectedMsg.equals(msg)) {
                             messageFuture.complete(true);
                         }
