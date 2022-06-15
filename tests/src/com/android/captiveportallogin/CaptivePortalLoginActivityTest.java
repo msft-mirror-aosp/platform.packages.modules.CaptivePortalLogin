@@ -333,7 +333,6 @@ public class CaptivePortalLoginActivityTest {
             // https://github.com/android/android-test/issues/676 is fixed
             mActivityScenario.close();
             Intents.release();
-            getInstrumentation().getUiAutomation().dropShellPermissionIdentity();
         }
         getInstrumentation().getUiAutomation().setOnAccessibilityEventListener(null);
         getInstrumentation().getContext().getSystemService(ConnectivityManager.class)
@@ -355,8 +354,6 @@ public class CaptivePortalLoginActivityTest {
                         .putExtra(EXTRA_CAPTIVE_PORTAL_USER_AGENT, TEST_USERAGENT)
                         .putExtra(EXTRA_CAPTIVE_PORTAL, new MockCaptivePortal()));
         mActivityScenario.onActivity(activity -> {
-            getInstrumentation().getUiAutomation().adoptShellPermissionIdentity(
-                    android.Manifest.permission.POST_NOTIFICATIONS);
             ctx.getSystemService(KeyguardManager.class).requestDismissKeyguard(activity, null);
             // Dismiss dialogs or notification shade, so the test can interact with the activity.
             activity.sendBroadcast(new Intent(Intent.ACTION_CLOSE_SYSTEM_DIALOGS));
