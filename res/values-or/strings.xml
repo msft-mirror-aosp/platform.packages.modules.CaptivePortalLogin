@@ -25,8 +25,8 @@
     <string name="page_info_address" msgid="1290683284404217554">"ଠିକଣା:"</string>
     <string name="page_info" msgid="46593086046896385">"ପୃଷ୍ଠା ସୂଚନା"</string>
     <string name="downloading_paramfile" msgid="685182551665849043">"%1$s ଡାଉନଲୋଡ୍ କରାଯାଉଛି"</string>
-    <string name="download_completed" msgid="5430865338124330584">"ଡାଉନଲୋଡ୍ ସମ୍ପୂର୍ଣ୍ଣ ହୋଇଛି"</string>
-    <string name="error_downloading_paramfile" msgid="2431082160412515409">"%1$s ଡାଉନଲୋଡ୍ କରାଯାଇପାରିଲା ନାହିଁ"</string>
+    <string name="download_completed" msgid="5430865338124330584">"ଡାଉନଲୋଡ ସମ୍ପୂର୍ଣ୍ଣ ହୋଇଛି"</string>
+    <string name="error_downloading_paramfile" msgid="2431082160412515409">"%1$s ଡାଉନଲୋଡ କରାଯାଇପାରିଲା ନାହିଁ"</string>
     <string name="channel_name_downloads" msgid="8446786286617933444">"ଡାଉନଲୋଡଗୁଡ଼ିକ"</string>
     <string name="channel_description_downloads" msgid="8751992699855833481">"ସମ୍ପୂର୍ଣ୍ଣ ହୋଇଥିବା କିମ୍ବା ବାତିଲ କରାଯାଇଥିବା ଡାଉନଲୋଡଗୁଡ଼ିକ ଦେଖାଉଥିବା ବିଜ୍ଞପ୍ତିଗୁଡ଼ିକ"</string>
     <string name="channel_name_download_progress" msgid="6805362260479605374">"ଡାଉନଲୋଡର ପ୍ରଗତି"</string>
