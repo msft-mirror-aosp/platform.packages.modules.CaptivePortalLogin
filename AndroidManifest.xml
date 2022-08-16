@@ -29,6 +29,7 @@
     <uses-permission android:name="android.permission.READ_DEVICE_CONFIG" />
     <uses-permission android:name="android.permission.MAINLINE_NETWORK_STACK" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
 
     <!-- The login activity can start downloads, and in cases where the download is an APK,
     tapping on the notification to open the downloaded file will cause the package installer to
