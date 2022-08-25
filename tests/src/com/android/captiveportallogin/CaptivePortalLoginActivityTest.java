@@ -99,6 +99,7 @@ import androidx.test.uiautomator.UiDevice;
 import androidx.test.uiautomator.UiObject;
 import androidx.test.uiautomator.UiSelector;
 
+import com.android.testutils.SkipPresubmit;
 import com.android.testutils.TestNetworkTracker;
 
 import org.junit.After;
@@ -128,6 +129,7 @@ import fi.iki.elonen.NanoHTTPD;
 
 @RunWith(AndroidJUnit4.class)
 @SmallTest
+@SkipPresubmit(reason = "Temporary skip for very flaky tests: b/242680995")
 public class CaptivePortalLoginActivityTest {
     private static final String TEST_URL = "http://android.test.com";
     private static final int TEST_NETID = 1234;
@@ -333,6 +335,7 @@ public class CaptivePortalLoginActivityTest {
             // https://github.com/android/android-test/issues/676 is fixed
             mActivityScenario.close();
             Intents.release();
+            getInstrumentation().getUiAutomation().dropShellPermissionIdentity();
         }
         getInstrumentation().getUiAutomation().setOnAccessibilityEventListener(null);
         getInstrumentation().getContext().getSystemService(ConnectivityManager.class)
@@ -354,6 +357,8 @@ public class CaptivePortalLoginActivityTest {
                         .putExtra(EXTRA_CAPTIVE_PORTAL_USER_AGENT, TEST_USERAGENT)
                         .putExtra(EXTRA_CAPTIVE_PORTAL, new MockCaptivePortal()));
         mActivityScenario.onActivity(activity -> {
+            getInstrumentation().getUiAutomation().adoptShellPermissionIdentity(
+                    android.Manifest.permission.POST_NOTIFICATIONS);
             ctx.getSystemService(KeyguardManager.class).requestDismissKeyguard(activity, null);
             // Dismiss dialogs or notification shade, so the test can interact with the activity.
             activity.sendBroadcast(new Intent(Intent.ACTION_CLOSE_SYSTEM_DIALOGS));
