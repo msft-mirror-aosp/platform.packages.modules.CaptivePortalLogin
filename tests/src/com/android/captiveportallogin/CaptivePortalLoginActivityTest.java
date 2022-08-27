@@ -99,6 +99,7 @@ import androidx.test.uiautomator.UiDevice;
 import androidx.test.uiautomator.UiObject;
 import androidx.test.uiautomator.UiSelector;
 
+import com.android.testutils.SkipPresubmit;
 import com.android.testutils.TestNetworkTracker;
 
 import org.junit.After;
@@ -128,6 +129,7 @@ import fi.iki.elonen.NanoHTTPD;
 
 @RunWith(AndroidJUnit4.class)
 @SmallTest
+@SkipPresubmit(reason = "Temporary skip for very flaky tests: b/242680995")
 public class CaptivePortalLoginActivityTest {
     private static final String TEST_URL = "http://android.test.com";
     private static final int TEST_NETID = 1234;
