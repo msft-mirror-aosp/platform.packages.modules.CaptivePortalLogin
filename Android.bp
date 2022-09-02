@@ -45,6 +45,7 @@ android_app {
 android_library {
     name: "CaptivePortalLoginTestLib",
     defaults: ["CaptivePortalLoginDefaults"],
+    static_libs: ["net-tests-utils"],
     lint: { strict_updatability_linting: true }
 }
 
