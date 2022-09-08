@@ -32,10 +32,7 @@ java_defaults {
     ],
     manifest: "AndroidManifest.xml",
     plugins: ["java_api_finder"],
-    lint: { strict_updatability_linting: true },
-    optimize: {
-        ignore_warnings: false,
-    },
+    lint: { strict_updatability_linting: true }
 }
 
 android_app {
