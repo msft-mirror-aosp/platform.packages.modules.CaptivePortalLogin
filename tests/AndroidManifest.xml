@@ -19,6 +19,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
           xmlns:tools="http://schemas.android.com/tools"
     package="com.android.captiveportallogin.tests">
+
+    <!-- Other permissions are inherited from the manifest of the app. But note that this test
+         cannot obtain all the app's permissions because some of them require being preinstalled or
+         having the MAINLINE_NETWORK_STACK permission. -->
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
 
     <application android:debuggable="true">
