@@ -26,7 +26,7 @@ java_defaults {
     target_sdk_version: "33", // Keep in sync with CaptivePortalLoginTests
     static_libs: [
         "androidx.annotation_annotation",
-        "androidx.legacy_legacy-support-v4",
+        "androidx.legacy_legacy-support-core-ui",
         "metrics-constants-protos",
         "captiveportal-lib",
     ],
