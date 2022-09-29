@@ -19,7 +19,7 @@
     <string name="ssl_error_unknown" msgid="3751419329218834886">"Eroare de certificat necunoscută."</string>
     <string name="ssl_security_warning_title" msgid="7912335118289529802">"Avertisment de securitate"</string>
     <string name="ssl_error_view_certificate" msgid="3447891108083278449">"Vezi certificatul"</string>
-    <string name="custom_scheme_warning" msgid="1809266150423969087">"Rețeaua la care încercați să vă conectați vă solicită să deschideți altă aplicație."</string>
+    <string name="custom_scheme_warning" msgid="1809266150423969087">"Rețeaua la care încerci să te conectezi solicită să deschizi altă aplicație."</string>
     <string name="custom_scheme_example" msgid="7126568152528588592">"De exemplu, este posibil ca pagina de conectare să necesite o anumită aplicație pentru autentificare"</string>
     <string name="ok" msgid="6584612582120777209">"OK"</string>
     <string name="page_info_address" msgid="1290683284404217554">"Adresă:"</string>
