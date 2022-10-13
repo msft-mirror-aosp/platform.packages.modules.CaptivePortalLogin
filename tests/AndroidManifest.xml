@@ -25,7 +25,7 @@
          having the MAINLINE_NETWORK_STACK permission. -->
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
 
-    <application android:debuggable="true">
+    <application>
         <uses-library android:name="android.test.runner" />
         <provider android:name="androidx.core.content.FileProvider"
                   android:authorities="com.android.captiveportallogin.tests.fileprovider"
