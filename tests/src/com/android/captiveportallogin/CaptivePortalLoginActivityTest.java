@@ -25,7 +25,6 @@ import static android.net.ConnectivityManager.EXTRA_CAPTIVE_PORTAL_URL;
 import static android.net.ConnectivityManager.EXTRA_CAPTIVE_PORTAL_USER_AGENT;
 import static android.net.ConnectivityManager.EXTRA_NETWORK;
 import static android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED;
-import static android.provider.DeviceConfig.NAMESPACE_CONNECTIVITY;
 import static android.view.accessibility.AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED;
 
 import static androidx.lifecycle.Lifecycle.State.DESTROYED;
@@ -84,7 +83,6 @@ import android.os.Bundle;
 import android.os.ConditionVariable;
 import android.os.Parcel;
 import android.os.Parcelable;
-import android.provider.DeviceConfig;
 import android.view.accessibility.AccessibilityEvent;
 import android.widget.Toast;
 
@@ -289,11 +287,9 @@ public class CaptivePortalLoginActivityTest {
 
         MockitoAnnotations.initMocks(this);
         mSession = mockitoSession()
-                .spyStatic(DeviceConfig.class)
                 .spyStatic(FileProvider.class)
                 .strictness(Strictness.WARN)
                 .startMocking();
-        setDismissPortalInValidatedNetwork(true);
         // Use a real (but test) network for the application. The application will pass this
         // network to ConnectivityManager#bindProcessToNetwork, so it needs to be a real, existing
         // network on the device but otherwise has no functional use at all. The http server set up
@@ -524,15 +520,6 @@ public class CaptivePortalLoginActivityTest {
         verifyNotDone();
     }
 
-    private void setDismissPortalInValidatedNetwork(final boolean enable) {
-        // Feature is enabled if the package version greater than configuration. Instead of reading
-        // the package version, use Long.MAX_VALUE to replace disable configuration and 1 for
-        // enabling.
-        doReturn(enable ? 1 : Long.MAX_VALUE).when(() -> DeviceConfig.getLong(
-                NAMESPACE_CONNECTIVITY,
-                CaptivePortalLoginActivity.DISMISS_PORTAL_IN_VALIDATED_NETWORK, 0 /* default */));
-    }
-
     void waitForDestroyedState() throws Exception {
         final long startTimeMs = System.currentTimeMillis();
         long currentTimeMs = startTimeMs;
@@ -544,8 +531,8 @@ public class CaptivePortalLoginActivityTest {
     }
 
     // TODO (b/244275469): figure out why first test is slow to start and revert 10min timeout
-    @Test(timeout = 600_000L)
-    public void testNetworkCapabilitiesUpdate() throws Exception {
+    @Test(timeout = 600_000L) @SdkSuppress(minSdkVersion = Build.VERSION_CODES.R)
+    public void testNetworkCapabilitiesUpdate_RAndLater() throws Exception {
         initActivity(TEST_URL);
         // NetworkCapabilities updates w/o NET_CAPABILITY_VALIDATED.
         final NetworkCapabilities nc = new NetworkCapabilities();
@@ -562,23 +549,13 @@ public class CaptivePortalLoginActivityTest {
     }
 
     // TODO (b/244275469): figure out why first test is slow to start and revert 10min timeout
-    @Test(timeout = 600_000L)
-    public void testNetworkCapabilitiesUpdateWithFlag() throws Exception {
+    @Test(timeout = 600_000L) @SdkSuppress(maxSdkVersion = Build.VERSION_CODES.Q)
+    public void testNetworkCapabilitiesUpdate_Q() throws Exception {
         initActivity(TEST_URL);
         final NetworkCapabilities nc = new NetworkCapabilities();
         nc.setCapability(NET_CAPABILITY_VALIDATED, true);
-        // Disable flag. Auto-dismiss should not happen.
-        setDismissPortalInValidatedNetwork(false);
+        // Auto-dismiss should not happen.
         notifyValidatedChangedNotDone(nc);
-
-        // Enable flag. Auto-dismissed.
-        setDismissPortalInValidatedNetwork(true);
-        notifyValidatedChangedAndDismissed(nc);
-
-        // Workaround to deflake the test. The problem may be caused by a race with lock inside
-        // InstrumentationActivityInvoker.
-        // TODO: Remove it once https://github.com/android/android-test/issues/676 is fixed.
-        waitForDestroyedState();
     }
 
     private HttpServer runCustomSchemeTest(String linkUri) throws Exception {
