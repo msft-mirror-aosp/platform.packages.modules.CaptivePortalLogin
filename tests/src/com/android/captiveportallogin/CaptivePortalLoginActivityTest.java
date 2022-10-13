@@ -37,8 +37,6 @@ import static androidx.test.espresso.web.webdriver.DriverAtoms.webClick;
 import static androidx.test.platform.app.InstrumentationRegistry.getInstrumentation;
 
 import static com.android.captiveportallogin.DownloadService.DOWNLOAD_ABORTED_REASON_FILE_TOO_LARGE;
-import static com.android.dx.mockito.inline.extended.ExtendedMockito.doReturn;
-import static com.android.dx.mockito.inline.extended.ExtendedMockito.mockitoSession;
 import static com.android.testutils.TestNetworkTrackerKt.initTestNetwork;
 import static com.android.testutils.TestPermissionUtil.runAsShell;
 
@@ -53,6 +51,7 @@ import static org.junit.Assume.assumeTrue;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.anyInt;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
@@ -86,7 +85,6 @@ import android.os.Parcelable;
 import android.view.accessibility.AccessibilityEvent;
 import android.widget.Toast;
 
-import androidx.core.content.FileProvider;
 import androidx.test.core.app.ActivityScenario;
 import androidx.test.espresso.intent.Intents;
 import androidx.test.espresso.web.webdriver.Locator;
@@ -104,10 +102,9 @@ import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.MockitoAnnotations;
-import org.mockito.MockitoSession;
 import org.mockito.Spy;
-import org.mockito.quality.Strictness;
 
 import java.io.File;
 import java.io.IOException;
@@ -142,7 +139,6 @@ public class CaptivePortalLoginActivityTest {
     private static final String TEST_PORTAL_HOSTNAME = "localhost";
     private static final String TEST_WIFI_CONFIG_TYPE = "application/x-wifi-config";
     private ActivityScenario<InstrumentedCaptivePortalLoginActivity> mActivityScenario;
-    private MockitoSession mSession;
     private Network mNetwork = new Network(TEST_NETID);
     private TestNetworkTracker mTestNetworkTracker;
 
@@ -224,6 +220,12 @@ public class CaptivePortalLoginActivityTest {
             }
             super.startActivity(intent);
         }
+
+        @Override
+        String getFileProviderAuthority() {
+            // Matches the test provider in the test app manifest
+            return "com.android.captiveportallogin.tests.fileprovider";
+        }
     }
 
     /** Class to replace CaptivePortal to prevent mock object is updated and replaced by parcel. */
@@ -286,10 +288,6 @@ public class CaptivePortalLoginActivityTest {
         sDownloadServiceBinder = mock(DownloadService.DownloadServiceBinder.class);
 
         MockitoAnnotations.initMocks(this);
-        mSession = mockitoSession()
-                .spyStatic(FileProvider.class)
-                .strictness(Strictness.WARN)
-                .startMocking();
         // Use a real (but test) network for the application. The application will pass this
         // network to ConnectivityManager#bindProcessToNetwork, so it needs to be a real, existing
         // network on the device but otherwise has no functional use at all. The http server set up
@@ -339,8 +337,6 @@ public class CaptivePortalLoginActivityTest {
         if (mTestNetworkTracker != null) {
             runAsShell(MANAGE_TEST_NETWORKS, mTestNetworkTracker::teardown);
         }
-        // finish mocking after the activity has terminated to avoid races on teardown.
-        mSession.finishMocking();
     }
 
     private void initActivity(String url) {
@@ -844,7 +840,7 @@ public class CaptivePortalLoginActivityTest {
     }
 
     private HttpServer prepareTestDirectlyOpen(String linkIdDownload, String downloadQuery,
-            String filename, String mimetype, Uri mockFile) throws Exception {
+            String filename, String mimetype) throws Exception {
         // Setup the server with a single link on the portal page, leading to a download
         final HttpServer server = new HttpServer();
         server.setResponseBody(TEST_URL_QUERY,
@@ -853,8 +849,6 @@ public class CaptivePortalLoginActivityTest {
                 "Content-Disposition", "attachment; filename=\"" + filename + "\""));
         server.start();
 
-        doReturn(mockFile).when(() -> FileProvider.getUriForFile(any(),
-                eq(CaptivePortalLoginActivity.FILE_PROVIDER_AUTHORITY), any()));
         ActivityScenario.launch(RequestDismissKeyguardActivity.class);
         initActivity(server.makeUrl(TEST_URL_QUERY));
         return server;
@@ -894,7 +888,7 @@ public class CaptivePortalLoginActivityTest {
     public void testDirectlyOpen_onCreateDeleteFile() throws Exception {
         final String linkIdDownload = "download";
         final HttpServer server = prepareTestDirectlyOpen(linkIdDownload, "dl",
-                "test.wificonfig", TEST_WIFI_CONFIG_TYPE, Uri.parse("content://mockdata"));
+                "test.wificonfig", TEST_WIFI_CONFIG_TYPE);
         final UiObject spinner = getUiSpinner();
         final File downloadPath = new File(getInstrumentation().getContext().getFilesDir(),
                 CaptivePortalLoginActivity.FILE_PROVIDER_DOWNLOAD_PATH);
@@ -937,7 +931,7 @@ public class CaptivePortalLoginActivityTest {
                 R.string.cancel_pending_downloads);
 
         final HttpServer server = prepareTestDirectlyOpen(linkIdDownload, "dl",
-                "test.wificonfig", TEST_WIFI_CONFIG_TYPE, Uri.parse("content://mockdata"));
+                "test.wificonfig", TEST_WIFI_CONFIG_TYPE);
         onWebView().withElement(findElement(Locator.ID, linkIdDownload)).perform(webClick());
 
         final UiObject spinner = getUiSpinner();
@@ -953,27 +947,33 @@ public class CaptivePortalLoginActivityTest {
     @Test(timeout = 600_000L)
     public void testDirectlyOpen_cancelPendingTask() throws Exception {
         final String linkIdDownload = "download";
-        final Uri outFile = Uri.parse("content://mockdata");
+        final String downloadQuery = "dl";
+        final String filename = "test.wificonfig";
         final String mimeType = TEST_WIFI_CONFIG_TYPE;
         final int requestId = 123;
-        final HttpServer server = prepareTestDirectlyOpen(linkIdDownload, "dl",
-                "test.wificonfig", mimeType, outFile);
+        final HttpServer server = prepareTestDirectlyOpen(linkIdDownload, downloadQuery,
+                filename, mimeType);
 
         final UiObject spinner = getUiSpinner();
         // Verify no spinner first.
         assertFalse(spinner.exists());
         doReturn(requestId).when(sDownloadServiceBinder)
-                .requestDownload(any(), any(), any(), any(), eq(outFile), any(), eq(mimeType));
+                .requestDownload(any(), any(), any(), any(), any(), any(), eq(mimeType));
         onWebView().withElement(findElement(Locator.ID, linkIdDownload)).perform(webClick());
         // Expect to see the spinner
         assertTrue(spinner.waitForExists(TEST_TIMEOUT_MS));
+        final ArgumentCaptor<Uri> outfileCaptor = ArgumentCaptor.forClass(Uri.class);
+        verify(sDownloadServiceBinder).requestDownload(any(), any(),
+                eq(server.makeUrl(downloadQuery)),
+                eq(filename),
+                outfileCaptor.capture(), any(), eq(mimeType));
 
         // Cancel pending task.
         mActivityScenario.onActivity(a -> a.cancelPendingTask());
         verify(sDownloadServiceBinder).cancelTask(anyInt());
         // Callback with target task should hide the spinner.
         mActivityScenario.onActivity(a -> a.mProgressCallback.onDownloadComplete(
-                outFile, mimeType, requestId, false));
+                outfileCaptor.getValue(), mimeType, requestId, false));
         assertTrue(spinner.waitUntilGone(TEST_TIMEOUT_MS));
 
         server.stop();
@@ -989,7 +989,7 @@ public class CaptivePortalLoginActivityTest {
         final Uri otherFile = Uri.parse("content://otherdata");
         final int downloadId = 123;
         final HttpServer server = prepareTestDirectlyOpen(linkIdDownload, "dl",
-                filename, mimeType, mockFile);
+                filename, mimeType);
 
         final UiObject spinner = getUiSpinner();
         // Verify no spinner first.
