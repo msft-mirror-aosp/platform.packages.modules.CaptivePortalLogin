@@ -18,7 +18,6 @@ package com.android.captiveportallogin;
 
 import static android.net.ConnectivityManager.EXTRA_CAPTIVE_PORTAL_PROBE_SPEC;
 import static android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED;
-import static android.provider.DeviceConfig.NAMESPACE_CONNECTIVITY;
 
 import static com.android.captiveportallogin.DownloadService.isDirectlyOpenType;
 
@@ -32,7 +31,6 @@ import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.ServiceConnection;
-import android.content.pm.PackageManager.NameNotFoundException;
 import android.graphics.Bitmap;
 import android.net.CaptivePortal;
 import android.net.CaptivePortalData;
@@ -54,7 +52,6 @@ import android.os.Bundle;
 import android.os.IBinder;
 import android.os.Looper;
 import android.os.SystemProperties;
-import android.provider.DeviceConfig;
 import android.provider.DocumentsContract;
 import android.provider.MediaStore;
 import android.text.TextUtils;
@@ -417,7 +414,7 @@ public class CaptivePortalLoginActivity extends Activity {
     @VisibleForTesting
     void handleCapabilitiesChanged(@NonNull final Network network,
             @NonNull final NetworkCapabilities nc) {
-        if (!isFeatureEnabled(DISMISS_PORTAL_IN_VALIDATED_NETWORK, isDismissPortalEnabled())) {
+        if (!isNetworkValidationDismissEnabled()) {
             return;
         }
 
@@ -427,10 +424,13 @@ public class CaptivePortalLoginActivity extends Activity {
         }
     }
 
-    private boolean isDismissPortalEnabled() {
-        return isAtLeastR()
-                || (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q
-                && !"REL".equals(Build.VERSION.CODENAME));
+    /**
+     * Indicates whether network validation (NET_CAPABILITY_VALIDATED) should be used to determine
+     * when the portal should be dismissed, instead of having the CaptivePortalLoginActivity use
+     * its own probe.
+     */
+    private boolean isNetworkValidationDismissEnabled() {
+        return isAtLeastR();
     }
 
     private boolean isAtLeastR() {
@@ -666,7 +666,7 @@ public class CaptivePortalLoginActivity extends Activity {
     }
 
     private void reevaluateNetwork() {
-        if (isFeatureEnabled(DISMISS_PORTAL_IN_VALIDATED_NETWORK, isDismissPortalEnabled())) {
+        if (isNetworkValidationDismissEnabled()) {
             // TODO : replace this with an actual call to the method when the network stack
             // is built against a recent enough SDK.
             if (callVoidMethodIfExists(mCaptivePortal, "reevaluateNetwork")) return;
@@ -686,7 +686,7 @@ public class CaptivePortalLoginActivity extends Activity {
     }
 
     private void testForCaptivePortal() {
-        // TODO: reuse NetworkMonitor facilities for consistent captive portal detection.
+        // TODO: NetworkMonitor validation is used on R+ instead; remove when dropping Q support.
         new Thread(new Runnable() {
             public void run() {
                 // Give time for captive portal to open.
@@ -1250,19 +1250,6 @@ public class CaptivePortalLoginActivity extends Activity {
 
     private static Integer sslErrorMessage(SslError error) {
         return SSL_ERROR_MSGS.get(error.getPrimaryError(), R.string.ssl_error_unknown);
-    }
-
-    private boolean isFeatureEnabled(@NonNull final String name, final boolean defaultEnabled) {
-        final long propertyVersion = DeviceConfig.getLong(NAMESPACE_CONNECTIVITY, name, 0);
-        long mPackageVersion = 0;
-        try {
-            mPackageVersion = getPackageManager().getPackageInfo(
-                getPackageName(), 0).getLongVersionCode();
-        } catch (NameNotFoundException e) {
-            Log.e(TAG, "Could not find the package name", e);
-        }
-        return (propertyVersion == 0 && defaultEnabled)
-                || (propertyVersion != 0 && mPackageVersion >= propertyVersion);
     }
 
     private CharSequence getVenueFriendlyName() {
