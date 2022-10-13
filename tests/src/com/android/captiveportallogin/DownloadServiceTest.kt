@@ -239,9 +239,10 @@ class DownloadServiceTest {
      * Create a temporary, empty file that can be used to read/write data for testing.
      */
     private fun createTestFile(extension: String = ".png"): File {
-        // temp/ is as exported in file_paths.xml, so that the file can be shared externally
-        // (in the download success notification)
-        val testFilePath = File(context.getCacheDir(), "temp")
+        // The test file provider uses the files dir (not cache dir or external files dir or...), as
+        // declared in its file_paths XML referenced from the manifest.
+        val testFilePath = File(context.getFilesDir(),
+                CaptivePortalLoginActivity.FILE_PROVIDER_DOWNLOAD_PATH)
         testFilePath.mkdir()
         // Do not use File.createTempFile, as it generates very long filenames that may not
         // fit in notifications, making it difficult to find the right notification.

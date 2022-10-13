@@ -118,8 +118,7 @@ public class CaptivePortalLoginActivity extends Activity {
     public static final String DISMISS_PORTAL_IN_VALIDATED_NETWORK =
             "dismiss_portal_in_validated_network";
     // This should match the FileProvider authority specified in the app manifest.
-    @VisibleForTesting
-    public static final String FILE_PROVIDER_AUTHORITY =
+    private static final String FILE_PROVIDER_AUTHORITY =
             "com.android.captiveportallogin.fileprovider";
     // This should match the path name in the FileProvider paths XML.
     @VisibleForTesting
@@ -1144,7 +1143,7 @@ public class CaptivePortalLoginActivity extends Activity {
             final File file = new File(downloadPath.getPath(), filename);
 
             final Uri uri = FileProvider.getUriForFile(
-                    CaptivePortalLoginActivity.this, FILE_PROVIDER_AUTHORITY, file);
+                    CaptivePortalLoginActivity.this, getFileProviderAuthority(), file);
 
             // Test if there is possible activity to handle this directly open file.
             final Intent testIntent = makeDirectlyOpenIntent(uri, mimeType);
@@ -1161,6 +1160,16 @@ public class CaptivePortalLoginActivity extends Activity {
 
             maybeStartPendingDownloads();
         }
+    }
+
+    /**
+     * Get the {@link androidx.core.content.FileProvider} authority for storing downloaded files.
+     *
+     * Useful for tests to override so they can use their own storage directories.
+     */
+    @VisibleForTesting
+    String getFileProviderAuthority() {
+        return FILE_PROVIDER_AUTHORITY;
     }
 
     private ProgressBar getProgressBar() {

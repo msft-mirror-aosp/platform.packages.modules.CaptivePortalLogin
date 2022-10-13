@@ -32,6 +32,7 @@
                   android:exported="false"
                   android:grantUriPermissions="true"
                   tools:replace="android:authorities" >
+            <!-- Use the same relative file_paths resource as the real provider -->
             <meta-data
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths"
