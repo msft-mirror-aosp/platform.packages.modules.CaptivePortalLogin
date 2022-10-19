@@ -871,6 +871,10 @@ public class CaptivePortalLoginActivityTest {
                         if (event.getEventType() != TYPE_NOTIFICATION_STATE_CHANGED) {
                             return;
                         }
+
+                        // Skip empty text events.
+                        if (event.getText().size() == 0) return;
+
                         final String msg = (String) event.getText().get(0);
                         // The event class name in older SDK platform will be
                         // "android.widget.Toast$TN" instead of "android.widget.Toast".
