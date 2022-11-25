@@ -115,8 +115,6 @@ public class CaptivePortalLoginActivity extends Activity {
     public static final String HTTP_LOCATION_HEADER_NAME = "Location";
     private static final String DEFAULT_CAPTIVE_PORTAL_HTTP_URL =
             "http://connectivitycheck.gstatic.com/generate_204";
-    public static final String DISMISS_PORTAL_IN_VALIDATED_NETWORK =
-            "dismiss_portal_in_validated_network";
     // This should match the FileProvider authority specified in the app manifest.
     private static final String FILE_PROVIDER_AUTHORITY =
             "com.android.captiveportallogin.fileprovider";
