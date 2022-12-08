@@ -1205,7 +1205,7 @@ public class CaptivePortalLoginActivity extends Activity {
             if (mWifiManager == null) {
                 return null;
             }
-            final WifiInfo wifiInfo = mWifiManager.getConnectionInfo();
+            final WifiInfo wifiInfo = getWifiConnectionInfo();
             return removeDoubleQuotes(wifiInfo.getSSID());
         }
 
@@ -1213,6 +1213,11 @@ public class CaptivePortalLoginActivity extends Activity {
             return null;
         }
         return removeDoubleQuotes(nc.getSsid());
+    }
+
+    @VisibleForTesting
+    WifiInfo getWifiConnectionInfo() {
+        return mWifiManager.getConnectionInfo();
     }
 
     private static String removeDoubleQuotes(String string) {
