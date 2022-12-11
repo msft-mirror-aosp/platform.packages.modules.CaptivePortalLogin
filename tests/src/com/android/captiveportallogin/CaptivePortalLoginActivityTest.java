@@ -98,8 +98,6 @@ import androidx.test.uiautomator.UiSelector;
 import com.android.testutils.SkipPresubmit;
 import com.android.testutils.TestNetworkTracker;
 
-import junit.framework.AssertionFailedError;
-
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -174,13 +172,6 @@ public class CaptivePortalLoginActivityTest {
 
         @Override
         WifiInfo getWifiConnectionInfo() {
-            // Note a mock of WifiManager is not used because mock(WifiManager.class) will crash
-            // when devices have received a recent wifi module update; for example
-            // WifiManager#notifyWifiSsidPolicyChanged(WifiSsidPolicy) depends on WifiSsidPolicy
-            // which only exists on T+, so WifiManager.class.getDeclaredMethods() will crash with
-            // a ClassNotFoundException on R/S with a recent wifi module.
-            // Regular mockito depends on DexmakerMockMaker, which uses getDeclaredMethods
-            // internally.
             return makeWifiInfo();
         }
 
@@ -326,7 +317,7 @@ public class CaptivePortalLoginActivityTest {
             WifiInfo.class.getMethod("setSSID", wifiSsidClass).invoke(info, wifiSsid);
             return info;
         } catch (ReflectiveOperationException e) {
-            throw new AssertionFailedError("Failed to create WifiInfo on Q: " + e);
+            throw new AssertionError("Failed to create WifiInfo on Q", e);
         }
     }
 
