@@ -1,8 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <resources xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:xliff="urn:oasis:names:tc:xliff:document:1.2">
-    <!-- no translation found for app_name (9113573340518078598) -->
-    <skip />
+    <string name="app_name" msgid="9113573340518078598">"କେପଟିଭ ପୋର୍ଟାଲ ଲଗଇନ"</string>
     <string name="action_use_network" msgid="8239049683838236305">"ଏହି ନେଟ୍‌ୱର୍କ ଯେପରି ଅଛି, ସେହିପରି ବ୍ୟବହାର କରନ୍ତୁ"</string>
     <string name="action_do_not_use_network" msgid="6324702363356892396">"ଏହି ନେଟ୍‌ୱର୍କକୁ ବ୍ୟବହାର କରନ୍ତୁ ନାହିଁ"</string>
     <string name="action_bar_label" msgid="2023171629563754892">"ନେଟ୍‌ୱର୍କରେ ସାଇନ୍‍ ଇନ୍‍ କରନ୍ତୁ"</string>
