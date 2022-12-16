@@ -47,6 +47,7 @@ import static junit.framework.Assert.assertNull;
 import static org.hamcrest.CoreMatchers.not;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 import static org.junit.Assume.assumeTrue;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.any;
@@ -76,7 +77,6 @@ import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.net.Uri;
 import android.net.wifi.WifiInfo;
-import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.ConditionVariable;
@@ -98,6 +98,8 @@ import androidx.test.uiautomator.UiSelector;
 import com.android.testutils.SkipPresubmit;
 import com.android.testutils.TestNetworkTracker;
 
+import junit.framework.AssertionFailedError;
+
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -110,7 +112,6 @@ import java.io.File;
 import java.io.IOException;
 import java.lang.reflect.Method;
 import java.net.ServerSocket;
-import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
@@ -145,7 +146,6 @@ public class CaptivePortalLoginActivityTest {
     private @Spy DownloadService mDownloadService = new DownloadService();
 
     private static ConnectivityManager sConnectivityManager;
-    private static WifiManager sMockWifiManager;
     private static DevicePolicyManager sMockDevicePolicyManager;
     private static DownloadService.DownloadServiceBinder sDownloadServiceBinder;
 
@@ -167,11 +167,21 @@ public class CaptivePortalLoginActivityTest {
                     return sConnectivityManager;
                 case Context.DEVICE_POLICY_SERVICE:
                     return sMockDevicePolicyManager;
-                case Context.WIFI_SERVICE:
-                    return sMockWifiManager;
                 default:
                     return super.getSystemService(name);
             }
+        }
+
+        @Override
+        WifiInfo getWifiConnectionInfo() {
+            // Note a mock of WifiManager is not used because mock(WifiManager.class) will crash
+            // when devices have received a recent wifi module update; for example
+            // WifiManager#notifyWifiSsidPolicyChanged(WifiSsidPolicy) depends on WifiSsidPolicy
+            // which only exists on T+, so WifiManager.class.getDeclaredMethods() will crash with
+            // a ClassNotFoundException on R/S with a recent wifi module.
+            // Regular mockito depends on DexmakerMockMaker, which uses getDeclaredMethods
+            // internally.
+            return makeWifiInfo();
         }
 
         @Override
@@ -283,7 +293,6 @@ public class CaptivePortalLoginActivityTest {
     public void setUp() throws Exception {
         final Context context = getInstrumentation().getContext();
         sConnectivityManager = spy(context.getSystemService(ConnectivityManager.class));
-        sMockWifiManager = mock(WifiManager.class);
         sMockDevicePolicyManager = mock(DevicePolicyManager.class);
         sDownloadServiceBinder = mock(DownloadService.DownloadServiceBinder.class);
 
@@ -301,25 +310,24 @@ public class CaptivePortalLoginActivityTest {
             automation.dropShellPermissionIdentity();
         }
         mNetwork = mTestNetworkTracker.getNetwork();
-
-        final WifiInfo testInfo = makeWifiInfo();
-        doReturn(testInfo).when(sMockWifiManager).getConnectionInfo();
     }
 
-    private static WifiInfo makeWifiInfo() throws Exception {
+    private static WifiInfo makeWifiInfo() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            return new WifiInfo.Builder()
-                    .setSsid(TEST_WIFIINFO_SSID.getBytes(StandardCharsets.US_ASCII))
-                    .build();
+            fail("Only Q should be using WifiInfo; R+ gets the wifi SSID via NetworkCapabilities");
         }
 
         // WifiInfo did not have a builder before R. Use non-public APIs on Q to set SSID.
-        final WifiInfo info = WifiInfo.class.getConstructor().newInstance();
-        final Class<?> wifiSsidClass = Class.forName("android.net.wifi.WifiSsid");
-        final Object wifiSsid = wifiSsidClass.getMethod("createFromAsciiEncoded",
-                String.class).invoke(null, TEST_WIFIINFO_SSID);
-        WifiInfo.class.getMethod("setSSID", wifiSsidClass).invoke(info, wifiSsid);
-        return info;
+        try {
+            final WifiInfo info = WifiInfo.class.getConstructor().newInstance();
+            final Class<?> wifiSsidClass = Class.forName("android.net.wifi.WifiSsid");
+            final Object wifiSsid = wifiSsidClass.getMethod("createFromAsciiEncoded",
+                    String.class).invoke(null, TEST_WIFIINFO_SSID);
+            WifiInfo.class.getMethod("setSSID", wifiSsidClass).invoke(info, wifiSsid);
+            return info;
+        } catch (ReflectiveOperationException e) {
+            throw new AssertionFailedError("Failed to create WifiInfo on Q: " + e);
+        }
     }
 
     @After
@@ -361,8 +369,7 @@ public class CaptivePortalLoginActivityTest {
         Intents.init();
     }
 
-    // TODO (b/244275469): figure out why first test is slow to start and revert 10min timeout
-    @Test(timeout = 600_000L)
+    @Test
     public void testonCreateWithNullCaptivePortal() throws Exception {
         final Context ctx = getInstrumentation().getContext();
         final Intent intent = new Intent(ctx, InstrumentedCaptivePortalLoginActivity.class)
@@ -423,8 +430,7 @@ public class CaptivePortalLoginActivityTest {
         doReturn(vpnCapabilities).when(sConnectivityManager).getNetworkCapabilities(network2);
     }
 
-    // TODO (b/244275469): figure out why first test is slow to start and revert 10min timeout
-    @Test(timeout = 600_000L)
+    @Test
     public void testHasVpnNetwork() throws Exception {
         initActivity(TEST_URL);
         // Test non-vpn case.
@@ -436,8 +442,7 @@ public class CaptivePortalLoginActivityTest {
         mActivityScenario.onActivity(activity -> assertTrue(activity.hasVpnNetwork()));
     }
 
-    // TODO (b/244275469): figure out why first test is slow to start and revert 10min timeout
-    @Test(timeout = 600_000L)
+    @Test
     public void testIsAlwaysOnVpnEnabled() throws Exception {
         initActivity(TEST_URL);
         doReturn(false).when(sMockDevicePolicyManager).isAlwaysOnVpnLockdownEnabled(any());
@@ -470,8 +475,7 @@ public class CaptivePortalLoginActivityTest {
                         (useVpnMatcher ? vpnMatcher : linkMatcher))));
     }
 
-    // TODO (b/244275469): figure out why first test is slow to start and revert 10min timeout
-    @Test(timeout = 600_000L) @SdkSuppress(maxSdkVersion = Build.VERSION_CODES.Q)
+    @Test @SdkSuppress(maxSdkVersion = Build.VERSION_CODES.Q)
     public void testVpnMsgOrLinkToBrowser_BeforeR() throws Exception {
         // Before Android R, CaptivePortalLogin cannot call isAlwaysOnVpnLockdownEnabled() due to
         // permission denied. So CaptivePortalLogin doesn't know the status of VPN always-on, and it
@@ -479,8 +483,7 @@ public class CaptivePortalLoginActivityTest {
         runVpnMsgOrLinkToBrowser(false /* useVpnMatcher */);
     }
 
-    // TODO (b/244275469): figure out why first test is slow to start and revert 10min timeout
-    @Test(timeout = 600_000L) @SdkSuppress(minSdkVersion = Build.VERSION_CODES.R)
+    @Test @SdkSuppress(minSdkVersion = Build.VERSION_CODES.R)
     public void testVpnMsgOrLinkToBrowser() throws Exception {
         // After Android R(including), DevicePolicyManager allows the caller who has the
         // PERMISSION_MAINLINE_NETWORK_STACK can call the isAlwaysOnVpnLockdownEnabled() to get the
@@ -526,8 +529,7 @@ public class CaptivePortalLoginActivityTest {
         }
     }
 
-    // TODO (b/244275469): figure out why first test is slow to start and revert 10min timeout
-    @Test(timeout = 600_000L) @SdkSuppress(minSdkVersion = Build.VERSION_CODES.R)
+    @Test @SdkSuppress(minSdkVersion = Build.VERSION_CODES.R)
     public void testNetworkCapabilitiesUpdate_RAndLater() throws Exception {
         initActivity(TEST_URL);
         // NetworkCapabilities updates w/o NET_CAPABILITY_VALIDATED.
@@ -544,8 +546,7 @@ public class CaptivePortalLoginActivityTest {
         waitForDestroyedState();
     }
 
-    // TODO (b/244275469): figure out why first test is slow to start and revert 10min timeout
-    @Test(timeout = 600_000L) @SdkSuppress(maxSdkVersion = Build.VERSION_CODES.Q)
+    @Test @SdkSuppress(maxSdkVersion = Build.VERSION_CODES.Q)
     public void testNetworkCapabilitiesUpdate_Q() throws Exception {
         initActivity(TEST_URL);
         final NetworkCapabilities nc = new NetworkCapabilities();
@@ -570,8 +571,7 @@ public class CaptivePortalLoginActivityTest {
         return server;
     }
 
-    // TODO (b/244275469): figure out why first test is slow to start and revert 10min timeout
-    @Test(timeout = 600_000L)
+    @Test
     public void testTelScheme() throws Exception {
         final String telUri = "tel:0123456789";
         final HttpServer server = runCustomSchemeTest(telUri);
@@ -583,8 +583,7 @@ public class CaptivePortalLoginActivityTest {
         server.stop();
     }
 
-    // TODO (b/244275469): figure out why first test is slow to start and revert 10min timeout
-    @Test(timeout = 600_000L)
+    @Test
     public void testSmsScheme() throws Exception {
         final String telUri = "sms:0123456789";
         final HttpServer server = runCustomSchemeTest(telUri);
@@ -596,8 +595,7 @@ public class CaptivePortalLoginActivityTest {
         server.stop();
     }
 
-    // TODO (b/244275469): figure out why first test is slow to start and revert 10min timeout
-    @Test(timeout = 600_000L)
+    @Test
     public void testUnsupportedScheme() throws Exception {
         final HttpServer server = runCustomSchemeTest("mailto:test@example.com");
         assertEquals(0, Intents.getIntents().size());
@@ -627,8 +625,7 @@ public class CaptivePortalLoginActivityTest {
         server.stop();
     }
 
-    // TODO (b/244275469): figure out why first test is slow to start and revert 10min timeout
-    @Test(timeout = 600_000L)
+    @Test
     public void testDownload() throws Exception {
         // Setup the server with a single link on the portal page, leading to a download
         final HttpServer server = new HttpServer();
@@ -681,8 +678,7 @@ public class CaptivePortalLoginActivityTest {
         server.stop();
     }
 
-    // TODO (b/244275469): figure out why first test is slow to start and revert 10min timeout
-    @Test(timeout = 600_000L)
+    @Test
     public void testVenueFriendlyNameTitle() throws Exception {
         assumeTrue(isAtLeastS());
         final LinkProperties linkProperties = new LinkProperties();
@@ -710,8 +706,7 @@ public class CaptivePortalLoginActivityTest {
                         TEST_FRIENDLY_NAME), activity.getActionBar().getTitle()));
     }
 
-    // TODO (b/244275469): figure out why first test is slow to start and revert 10min timeout
-    @Test(timeout = 600_000L) @SdkSuppress(maxSdkVersion = Build.VERSION_CODES.Q)
+    @Test @SdkSuppress(maxSdkVersion = Build.VERSION_CODES.Q)
     public void testWifiSsid_Q() throws Exception {
         configNonVpnNetwork();
         initActivity("https://portal.example.com/");
@@ -722,8 +717,7 @@ public class CaptivePortalLoginActivityTest {
 
     }
 
-    // TODO (b/244275469): figure out why first test is slow to start and revert 10min timeout
-    @Test(timeout = 600_000L) @SdkSuppress(minSdkVersion = Build.VERSION_CODES.R)
+    @Test @SdkSuppress(minSdkVersion = Build.VERSION_CODES.R)
     public void testWifiSsid() throws Exception {
         configNonVpnNetwork();
         initActivity("https://portal.example.com/");
@@ -887,8 +881,7 @@ public class CaptivePortalLoginActivityTest {
         return messageFuture;
     }
 
-    // TODO (b/244275469): figure out why first test is slow to start and revert 10min timeout
-    @Test(timeout = 600_000L)
+    @Test
     public void testDirectlyOpen_onCreateDeleteFile() throws Exception {
         final String linkIdDownload = "download";
         final HttpServer server = prepareTestDirectlyOpen(linkIdDownload, "dl",
@@ -911,8 +904,7 @@ public class CaptivePortalLoginActivityTest {
         server.stop();
     }
 
-    // TODO (b/244275469): figure out why first test is slow to start and revert 10min timeout
-    @Test(timeout = 600_000L)
+    @Test
     public void testDirectlyOpen_onDownloadAborted() throws Exception {
         initActivity(TEST_URL);
         final Uri mockFile = Uri.parse("content://mockdata");
@@ -927,8 +919,7 @@ public class CaptivePortalLoginActivityTest {
 
     }
 
-    // TODO (b/244275469): figure out why first test is slow to start and revert 10min timeout
-    @Test(timeout = 600_000L)
+    @Test
     public void testDirectlyOpen_taskCancelToast() throws Exception {
         final String linkIdDownload = "download";
         final String expectMsg = getInstrumentation().getContext().getString(
@@ -947,8 +938,7 @@ public class CaptivePortalLoginActivityTest {
         server.stop();
     }
 
-    // TODO (b/244275469): figure out why first test is slow to start and revert 10min timeout
-    @Test(timeout = 600_000L)
+    @Test
     public void testDirectlyOpen_cancelPendingTask() throws Exception {
         final String linkIdDownload = "download";
         final String downloadQuery = "dl";
@@ -983,8 +973,7 @@ public class CaptivePortalLoginActivityTest {
         server.stop();
     }
 
-    // TODO (b/244275469): figure out why first test is slow to start and revert 10min timeout
-    @Test(timeout = 600_000L)
+    @Test
     public void testDirectlyOpen_successfullyDownload() throws Exception {
         final String linkIdDownload = "download";
         final String mimeType = TEST_WIFI_CONFIG_TYPE;
