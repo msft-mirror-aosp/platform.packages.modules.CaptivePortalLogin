@@ -31,7 +31,6 @@ java_defaults {
         "captiveportal-lib",
     ],
     manifest: "AndroidManifest.xml",
-    plugins: ["java_api_finder"],
     lint: { strict_updatability_linting: true },
     optimize: {
         ignore_warnings: false,
