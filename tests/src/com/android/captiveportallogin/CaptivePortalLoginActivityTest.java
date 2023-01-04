@@ -47,6 +47,7 @@ import static junit.framework.Assert.assertNull;
 import static org.hamcrest.CoreMatchers.not;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 import static org.junit.Assume.assumeTrue;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.any;
@@ -76,7 +77,6 @@ import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.net.Uri;
 import android.net.wifi.WifiInfo;
-import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.ConditionVariable;
@@ -98,6 +98,8 @@ import androidx.test.uiautomator.UiSelector;
 import com.android.testutils.SkipPresubmit;
 import com.android.testutils.TestNetworkTracker;
 
+import junit.framework.AssertionFailedError;
+
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -110,7 +112,6 @@ import java.io.File;
 import java.io.IOException;
 import java.lang.reflect.Method;
 import java.net.ServerSocket;
-import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
@@ -145,7 +146,6 @@ public class CaptivePortalLoginActivityTest {
     private @Spy DownloadService mDownloadService = new DownloadService();
 
     private static ConnectivityManager sConnectivityManager;
-    private static WifiManager sMockWifiManager;
     private static DevicePolicyManager sMockDevicePolicyManager;
     private static DownloadService.DownloadServiceBinder sDownloadServiceBinder;
 
@@ -167,11 +167,21 @@ public class CaptivePortalLoginActivityTest {
                     return sConnectivityManager;
                 case Context.DEVICE_POLICY_SERVICE:
                     return sMockDevicePolicyManager;
-                case Context.WIFI_SERVICE:
-                    return sMockWifiManager;
                 default:
                     return super.getSystemService(name);
             }
+        }
+
+        @Override
+        WifiInfo getWifiConnectionInfo() {
+            // Note a mock of WifiManager is not used because mock(WifiManager.class) will crash
+            // when devices have received a recent wifi module update; for example
+            // WifiManager#notifyWifiSsidPolicyChanged(WifiSsidPolicy) depends on WifiSsidPolicy
+            // which only exists on T+, so WifiManager.class.getDeclaredMethods() will crash with
+            // a ClassNotFoundException on R/S with a recent wifi module.
+            // Regular mockito depends on DexmakerMockMaker, which uses getDeclaredMethods
+            // internally.
+            return makeWifiInfo();
         }
 
         @Override
@@ -283,7 +293,6 @@ public class CaptivePortalLoginActivityTest {
     public void setUp() throws Exception {
         final Context context = getInstrumentation().getContext();
         sConnectivityManager = spy(context.getSystemService(ConnectivityManager.class));
-        sMockWifiManager = mock(WifiManager.class);
         sMockDevicePolicyManager = mock(DevicePolicyManager.class);
         sDownloadServiceBinder = mock(DownloadService.DownloadServiceBinder.class);
 
@@ -301,25 +310,24 @@ public class CaptivePortalLoginActivityTest {
             automation.dropShellPermissionIdentity();
         }
         mNetwork = mTestNetworkTracker.getNetwork();
-
-        final WifiInfo testInfo = makeWifiInfo();
-        doReturn(testInfo).when(sMockWifiManager).getConnectionInfo();
     }
 
-    private static WifiInfo makeWifiInfo() throws Exception {
+    private static WifiInfo makeWifiInfo() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            return new WifiInfo.Builder()
-                    .setSsid(TEST_WIFIINFO_SSID.getBytes(StandardCharsets.US_ASCII))
-                    .build();
+            fail("Only Q should be using WifiInfo; R+ gets the wifi SSID via NetworkCapabilities");
         }
 
         // WifiInfo did not have a builder before R. Use non-public APIs on Q to set SSID.
-        final WifiInfo info = WifiInfo.class.getConstructor().newInstance();
-        final Class<?> wifiSsidClass = Class.forName("android.net.wifi.WifiSsid");
-        final Object wifiSsid = wifiSsidClass.getMethod("createFromAsciiEncoded",
-                String.class).invoke(null, TEST_WIFIINFO_SSID);
-        WifiInfo.class.getMethod("setSSID", wifiSsidClass).invoke(info, wifiSsid);
-        return info;
+        try {
+            final WifiInfo info = WifiInfo.class.getConstructor().newInstance();
+            final Class<?> wifiSsidClass = Class.forName("android.net.wifi.WifiSsid");
+            final Object wifiSsid = wifiSsidClass.getMethod("createFromAsciiEncoded",
+                    String.class).invoke(null, TEST_WIFIINFO_SSID);
+            WifiInfo.class.getMethod("setSSID", wifiSsidClass).invoke(info, wifiSsid);
+            return info;
+        } catch (ReflectiveOperationException e) {
+            throw new AssertionFailedError("Failed to create WifiInfo on Q: " + e);
+        }
     }
 
     @After
