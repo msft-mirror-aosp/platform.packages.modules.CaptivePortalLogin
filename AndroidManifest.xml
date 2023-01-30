@@ -18,8 +18,8 @@
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.android.captiveportallogin"
-    android:versionCode="311313000"
-    android:versionName="aml_net_311313000">
+    android:versionCode="311313030"
+    android:versionName="aml_net_311313030">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
