@@ -19,8 +19,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
           xmlns:tools="http://schemas.android.com/tools"
     package="com.android.captiveportallogin"
-    android:versionCode="311811010"
-    android:versionName="aml_net_311811010">
+    android:versionCode="311811080"
+    android:versionName="aml_net_311811080">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
