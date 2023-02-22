@@ -8,7 +8,7 @@
     <string name="action_bar_title" msgid="2566334512545554724">"ወደ %1$s ይግቡ"</string>
     <string name="ssl_error_warning" msgid="494203210316238046">"ለመቀላቀል እየሞከሩ ያሉት አውታረ መረብ የደህንነት ችግሮች አሉበት።"</string>
     <string name="ssl_error_example" msgid="4574594291839092653">"ለምሳሌ፣ የመግቢያ ገጹ የሚታየው ድርጅት ላይሆን ይችላል።"</string>
-    <string name="no_bypass_error_vpnwarning" msgid="5263739853101734851">"በተጨማሪም፣ መሣሪያው በአሁኑ ጊዜ ቪፒኤን እያስሄደ ስለሆነ ይህን ስሕተት አልፎ መሄድ አይቻልም።"</string>
+    <string name="no_bypass_error_vpnwarning" msgid="5263739853101734851">"በተጨማሪም፣ መሣሪያው በአሁኑ ጊዜ ቪፒኤን እያስሄደ ስለሆነ ይህን ስህተት አልፎ መሄድ አይቻልም።"</string>
     <string name="error_continue_via_browser" msgid="7091550471744444659">"ለማንኛውም በአሳሽ በኩል ይቀጥሉ"</string>
     <string name="ssl_error_untrusted" msgid="5183246242332501768">"ይህ የእውቅና ማረጋገጫ ከታማኝ ቦታ አይደለም።"</string>
     <string name="ssl_error_mismatch" msgid="5260665486390938291">"የጣቢያው ስም ከእውቅና ማረጋገጫው ስም ጋር አይዛመድም።"</string>
