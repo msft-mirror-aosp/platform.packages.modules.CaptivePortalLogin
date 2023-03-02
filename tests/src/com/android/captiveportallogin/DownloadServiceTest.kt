@@ -21,6 +21,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
+import android.content.res.Configuration
 import android.net.Network
 import android.net.Uri
 import android.os.Bundle
@@ -62,6 +63,7 @@ import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 import kotlin.test.fail
 import org.junit.Assert.assertNotNull
+import org.junit.Assume.assumeFalse
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -216,6 +218,12 @@ class DownloadServiceTest {
         ActivityScenario.launch(RequestDismissKeyguardActivity::class.java)
     }
 
+    private fun assumeCanDisplayNotifications() {
+        val isTvUi = (resources.configuration.uiMode and Configuration.UI_MODE_TYPE_TELEVISION) != 0
+        // See https://tv.withgoogle.com/patterns/notifications.html
+        assumeFalse("TVs don't display notifications", isTvUi)
+    }
+
     /**
      * Create a temporary, empty file that can be used to read/write data for testing.
      */
@@ -252,6 +260,8 @@ class DownloadServiceTest {
 
     @Test
     fun testDownloadFile() {
+        assumeCanDisplayNotifications()
+
         val inputStream1 = TestInputStream()
         doReturn(inputStream1).`when`(connection).inputStream
 
@@ -420,6 +430,8 @@ class DownloadServiceTest {
 
     @Test
     fun testTapDoneNotification() {
+        assumeCanDisplayNotifications()
+
         val fileContents = "Test file contents"
         val bis = ByteArrayInputStream(fileContents.toByteArray(StandardCharsets.UTF_8))
         doReturn(bis).`when`(connection).inputStream
