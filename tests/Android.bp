@@ -22,14 +22,14 @@ android_test {
     name: "CaptivePortalLoginTests",
     defaults: [
         "framework-connectivity-test-defaults",
-        "connectivity-mainline-presubmit-java-defaults",
     ],
     srcs: ["src/**/*.java", "src/**/*.kt"],
     platform_apis: true,
     compile_multilib: "both",
-    min_sdk_version: "29",
+    min_sdk_version: "30",
     target_sdk_version: "33", // Keep in sync with CaptivePortalLogin
     test_suites: ["general-tests", "mts-networking"],
+    test_config: "AndroidTest.xml",
 
     static_libs: [
         "androidx.test.rules",
