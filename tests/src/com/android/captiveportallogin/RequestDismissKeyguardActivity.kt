@@ -29,7 +29,7 @@ class RequestDismissKeyguardActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setTurnScreenOn(true)
-        getSystemService(KeyguardManager::class.java).requestDismissKeyguard(this, null)
+        getSystemService(KeyguardManager::class.java)!!.requestDismissKeyguard(this, null)
         finish()
     }
 }
