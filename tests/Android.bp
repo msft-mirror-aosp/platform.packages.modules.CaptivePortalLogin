@@ -27,8 +27,8 @@ android_test {
     srcs: ["src/**/*.java", "src/**/*.kt"],
     platform_apis: true,
     compile_multilib: "both",
-    min_sdk_version: "29",
-    target_sdk_version: "33", // Keep in sync with CaptivePortalLogin
+    min_sdk_version: "30",
+    target_sdk_version: "34", // Keep in sync with CaptivePortalLogin
     test_suites: ["general-tests", "mts-networking"],
 
     static_libs: [
