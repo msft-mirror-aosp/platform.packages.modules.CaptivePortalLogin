@@ -42,7 +42,7 @@
             android:name="com.android.captiveportallogin.CaptivePortalLoginActivityTest$InstrumentedCaptivePortalLoginActivity"/>
         <activity android:name="com.android.captiveportallogin.DownloadServiceTest$RequestDismissKeyguardActivity"/>
         <activity android:name="com.android.captiveportallogin.DownloadServiceTest$OpenTextFileActivity"
-                  android:exported="false" >
+                  android:exported="true" >
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
