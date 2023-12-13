@@ -20,7 +20,7 @@
     <string name="ssl_security_warning_title" msgid="7912335118289529802">"የደህንነት ቅንብሮች"</string>
     <string name="ssl_error_view_certificate" msgid="3447891108083278449">"የእውቅና ማረጋገጫን ይመልከቱ"</string>
     <string name="custom_scheme_warning" msgid="1809266150423969087">"ለመቀላቀል እየሞከሩ ያሉት አውታረ መረብ ሌላ መተግበሪያን ለመክፈት ጥያቄ እያቀረበ ነው።"</string>
-    <string name="custom_scheme_example" msgid="7126568152528588592">"ለምሳሌ፣ በመለያ መግቢያው ገፅ ለማረጋገጥ የተወሰነ መተግበሪያ ሊጠይቅ ይችላል"</string>
+    <string name="custom_scheme_example" msgid="7126568152528588592">"ለምሳሌ፣ በመለያ መግቢያው ገጽ ለማረጋገጥ የተወሰነ መተግበሪያ ሊጠይቅ ይችላል"</string>
     <string name="ok" msgid="6584612582120777209">"እሺ"</string>
     <string name="page_info_address" msgid="1290683284404217554">"አድራሻ፦"</string>
     <string name="page_info" msgid="46593086046896385">"የገጽ መረጃ"</string>
