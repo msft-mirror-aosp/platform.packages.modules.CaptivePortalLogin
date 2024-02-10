@@ -15,6 +15,7 @@
 //
 
 package {
+    default_team: "trendy_team_fwk_core_networking",
     default_applicable_licenses: ["Android-Apache-2.0"],
 }
 
@@ -31,7 +32,9 @@ java_defaults {
         "captiveportal-lib",
     ],
     manifest: "AndroidManifest.xml",
-    lint: { strict_updatability_linting: true },
+    lint: {
+        strict_updatability_linting: true,
+    },
     optimize: {
         ignore_warnings: false,
     },
@@ -48,7 +51,9 @@ android_library {
     name: "CaptivePortalLoginTestLib",
     defaults: ["CaptivePortalLoginDefaults"],
     static_libs: ["net-tests-utils"],
-    lint: { strict_updatability_linting: true }
+    lint: {
+        strict_updatability_linting: true,
+    },
 }
 
 // Alternative CaptivePortalLogin signed with the platform cert, to use
@@ -58,5 +63,7 @@ android_app {
     defaults: ["CaptivePortalLoginDefaults"],
     certificate: "platform",
     overrides: ["CaptivePortalLogin"],
-    lint: { strict_updatability_linting: true }
+    lint: {
+        strict_updatability_linting: true,
+    },
 }
