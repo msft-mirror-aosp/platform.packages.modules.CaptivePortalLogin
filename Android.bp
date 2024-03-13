@@ -38,9 +38,11 @@ android_library {
     srcs: ["src/**/*.java"],
     static_libs: [
         "androidx.annotation_annotation",
+        "androidx.browser_browser",
         "androidx.legacy_legacy-support-core-ui",
         "captiveportal-lib",
         "metrics-constants-protos",
+        "net-utils-connectivity-apks",
     ],
     libs: [
         "framework-connectivity",
