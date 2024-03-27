@@ -22,7 +22,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
           xmlns:tools="http://schemas.android.com/tools"
     package="com.android.captiveportallogin"
-    android:versionCode="350009000">
+    android:versionCode="350010000">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -45,6 +45,15 @@
     Applications may be offered on portals such as airline wifi, in which case installing the app
     from the portal can be useful. -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
+    <!-- In order to support CustomTabsClient#getPackageName method to query the PackageManager
+    to determine which packages support the Custom Tabs API. On apps that target Android 11
+    and above, this requires adding the following package visibility elements to the manifest.-->
+    <queries>
+        <intent>
+            <action android:name="android.support.customtabs.action.CustomTabsService" />
+        </intent>
+    </queries>
 
     <application android:label="@string/app_name"
                  android:icon="@drawable/app_icon"
