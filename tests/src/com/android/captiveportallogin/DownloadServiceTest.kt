@@ -28,6 +28,7 @@ import android.os.Bundle
 import android.os.IBinder
 import android.os.Parcel
 import android.os.Parcelable
+import android.util.Log
 import android.widget.TextView
 import androidx.core.content.FileProvider
 import androidx.test.core.app.ActivityScenario
@@ -101,6 +102,8 @@ private val NOTIFICATION_SCROLL_STEPS = 5
 private val NOTIFICATION_SCROLL_POLL_MS = 100L
 
 private val TEST_WIFI_CONFIG_TYPE = "application/x-wifi-config"
+
+private val TAG = DownloadServiceTest::class.simpleName
 
 @Rule
 val mServiceRule = ServiceTestRule()
@@ -253,7 +256,8 @@ class DownloadServiceTest {
         while (true) {
             val file = File(testFilePath, "tmp$index$extension")
             if (!file.exists()) {
-                file.createNewFile()
+                // createNewFile only returns false if the file already exists (it throws on error)
+                assertTrue(file.createNewFile(), "$file was created after exists() check")
                 return file
             }
             index++
@@ -280,15 +284,26 @@ class DownloadServiceTest {
 
         val testFile1 = createTestFile()
         val testFile2 = createTestFile()
+        assertTrue(testFile1.exists(), "$testFile1 did not exist after creation")
+        assertTrue(testFile2.exists(), "$testFile2 did not exist after creation")
+
         assertNotEquals(testFile1.name, testFile2.name)
         openNotificationShade()
+
+        assertTrue(testFile1.exists(), "$testFile1 did not exist before starting download")
+        assertTrue(testFile2.exists(), "$testFile2 did not exist before starting download")
 
         // Queue both downloads immediately: they should be started in order
         val binder = bindService(makeDownloadCompleteCallback())
         startDownloadTask(binder, testFile1, TEST_TEXT_FILE_TYPE)
         startDownloadTask(binder, testFile2, TEST_TEXT_FILE_TYPE)
 
-        verify(connection, timeout(TEST_TIMEOUT_MS)).inputStream
+        try {
+            verify(connection, timeout(TEST_TIMEOUT_MS)).inputStream
+        } finally {
+            Log.i(TAG, "testFile1 exists after connecting: ${testFile1.exists()}")
+            Log.i(TAG, "testFile2 exists after connecting: ${testFile2.exists()}")
+        }
         val dlText1 = resources.getString(R.string.downloading_paramfile, testFile1.name)
 
         findNotification(UiSelector().textContains(dlText1))
