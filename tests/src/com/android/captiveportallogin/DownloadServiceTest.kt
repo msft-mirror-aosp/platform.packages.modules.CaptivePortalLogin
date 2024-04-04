@@ -28,6 +28,7 @@ import android.os.Bundle
 import android.os.IBinder
 import android.os.Parcel
 import android.os.Parcelable
+import android.util.Log
 import android.widget.TextView
 import androidx.core.content.FileProvider
 import androidx.test.core.app.ActivityScenario
@@ -83,14 +84,17 @@ private val TEST_TEXT_FILE_EXTENSION = "testtxtfile"
 private val TEST_TEXT_FILE_TYPE = "text/vnd.captiveportallogin.testtxtfile"
 
 private val TEST_TIMEOUT_MS = 10_000L
+
 // Timeout for notifications before trying to find it via scrolling
 private val NOTIFICATION_NO_SCROLL_TIMEOUT_MS = 1000L
 
 // Maximum number of scrolls from the top to attempt to find notifications in the notification shade
 private val NOTIFICATION_SCROLL_COUNT = 30
+
 // Swipe in a vertically centered area of 20% of the screen height (40% margin
 // top/down): small swipes on notifications avoid dismissing the notification shade
 private val NOTIFICATION_SCROLL_DEAD_ZONE_PERCENT = .4
+
 // Steps for each scroll in the notification shade (controls the scrolling speed).
 // Each scroll is a series of cursor moves between multiple points on a line. The delay between each
 // point is hard-coded, so the number of points (steps) controls how long the scroll takes.
@@ -98,6 +102,8 @@ private val NOTIFICATION_SCROLL_STEPS = 5
 private val NOTIFICATION_SCROLL_POLL_MS = 100L
 
 private val TEST_WIFI_CONFIG_TYPE = "application/x-wifi-config"
+
+private val TAG = DownloadServiceTest::class.simpleName
 
 @Rule
 val mServiceRule = ServiceTestRule()
@@ -112,8 +118,8 @@ class DownloadServiceTest {
     private val device by lazy { UiDevice.getInstance(getInstrumentation()) }
 
     // Test network that can be parceled in intents while mocking the connection
-    class TestNetwork(private val privateDnsBypass: Boolean = false)
-        : Network(43, privateDnsBypass) {
+    class TestNetwork(private val privateDnsBypass: Boolean = false) :
+        Network(43, privateDnsBypass) {
         companion object {
             // Subclasses of parcelable classes need to define a CREATOR field of their own (which
             // hides the one of the parent class), otherwise the CREATOR field of the parent class
@@ -147,8 +153,10 @@ class DownloadServiceTest {
         override fun openConnection(url: URL?): URLConnection {
             // Verify that this network was created with privateDnsBypass = true, and was not
             // parceled / unparceled afterwards (which would have cleared the flag).
-            assertTrue(privateDnsBypass,
-                    "Captive portal downloads should be done on a network bypassing private DNS")
+            assertTrue(
+                privateDnsBypass,
+                    "Captive portal downloads should be done on a network bypassing private DNS"
+            )
             return sTestConnection ?: throw IllegalStateException(
                     "Mock URLConnection not initialized")
         }
@@ -175,9 +183,14 @@ class DownloadServiceTest {
          * waiting for the data to be made available, this method will block until it is.
          */
         fun setAvailable(newAvailable: Int) {
-            assertTrue(nextAvailableQueue.offer(newAvailable.coerceIn(0, TEST_FILESIZE),
-                    TEST_TIMEOUT_MS, MILLISECONDS),
-                    "Timed out waiting for TestInputStream to be read")
+            assertTrue(
+                nextAvailableQueue.offer(
+                    newAvailable.coerceIn(0, TEST_FILESIZE),
+                    TEST_TIMEOUT_MS,
+                    MILLISECONDS
+                ),
+                    "Timed out waiting for TestInputStream to be read"
+            )
         }
 
         override fun read(): Int {
@@ -230,8 +243,10 @@ class DownloadServiceTest {
     private fun createTestFile(extension: String = ".png"): File {
         // The test file provider uses the files dir (not cache dir or external files dir or...), as
         // declared in its file_paths XML referenced from the manifest.
-        val testFilePath = File(context.getFilesDir(),
-                CaptivePortalLoginActivity.FILE_PROVIDER_DOWNLOAD_PATH)
+        val testFilePath = File(
+            context.getFilesDir(),
+                CaptivePortalLoginActivity.FILE_PROVIDER_DOWNLOAD_PATH
+        )
         testFilePath.mkdir()
         // Do not use File.createTempFile, as it generates very long filenames that may not
         // fit in notifications, making it difficult to find the right notification.
@@ -241,7 +256,8 @@ class DownloadServiceTest {
         while (true) {
             val file = File(testFilePath, "tmp$index$extension")
             if (!file.exists()) {
-                file.createNewFile()
+                // createNewFile only returns false if the file already exists (it throws on error)
+                assertTrue(file.createNewFile(), "$file was created after exists() check")
                 return file
             }
             index++
@@ -256,7 +272,8 @@ class DownloadServiceTest {
             context,
             // File provider registered in the test manifest
             "com.android.captiveportallogin.tests.fileprovider",
-            testFile)
+            testFile
+    )
 
     @Test
     fun testDownloadFile() {
@@ -267,15 +284,26 @@ class DownloadServiceTest {
 
         val testFile1 = createTestFile()
         val testFile2 = createTestFile()
+        assertTrue(testFile1.exists(), "$testFile1 did not exist after creation")
+        assertTrue(testFile2.exists(), "$testFile2 did not exist after creation")
+
         assertNotEquals(testFile1.name, testFile2.name)
         openNotificationShade()
+
+        assertTrue(testFile1.exists(), "$testFile1 did not exist before starting download")
+        assertTrue(testFile2.exists(), "$testFile2 did not exist before starting download")
 
         // Queue both downloads immediately: they should be started in order
         val binder = bindService(makeDownloadCompleteCallback())
         startDownloadTask(binder, testFile1, TEST_TEXT_FILE_TYPE)
         startDownloadTask(binder, testFile2, TEST_TEXT_FILE_TYPE)
 
-        verify(connection, timeout(TEST_TIMEOUT_MS)).inputStream
+        try {
+            verify(connection, timeout(TEST_TIMEOUT_MS)).inputStream
+        } finally {
+            Log.i(TAG, "testFile1 exists after connecting: ${testFile1.exists()}")
+            Log.i(TAG, "testFile2 exists after connecting: ${testFile2.exists()}")
+        }
         val dlText1 = resources.getString(R.string.downloading_paramfile, testFile1.name)
 
         findNotification(UiSelector().textContains(dlText1))
@@ -361,7 +389,8 @@ class DownloadServiceTest {
         val downloadAbortedFuture = CompletableFuture<Boolean>()
         val mTestServiceConn = makeDownloadCompleteCallback(
                 downloadAbortedFuture = downloadAbortedFuture,
-                expectReason = DOWNLOAD_ABORTED_REASON_FILE_TOO_LARGE)
+                expectReason = DOWNLOAD_ABORTED_REASON_FILE_TOO_LARGE
+        )
 
         try {
             val binder = bindService(mTestServiceConn)
@@ -387,7 +416,8 @@ class DownloadServiceTest {
         val otherCompleteFuture = CompletableFuture<Boolean>()
         val testServiceConn = makeDownloadCompleteCallback(
                 directlyOpenCompleteFuture = directlyOpenCompleteFuture,
-                downloadCompleteFuture = otherCompleteFuture)
+                downloadCompleteFuture = otherCompleteFuture
+        )
 
         try {
             val binder = bindService(testServiceConn)
@@ -410,14 +440,20 @@ class DownloadServiceTest {
     private fun createTestDirectlyOpenFile() = createTestFile(extension = ".wificonfig")
 
     private fun bindService(serviceConn: ServiceConnection): DownloadServiceBinder {
-        val binder = mServiceRule.bindService(Intent(context, DownloadService::class.java),
-                serviceConn, Context.BIND_AUTO_CREATE) as DownloadServiceBinder
+        val binder = mServiceRule.bindService(
+            Intent(context, DownloadService::class.java),
+                serviceConn,
+            Context.BIND_AUTO_CREATE
+        ) as DownloadServiceBinder
         assertNotNull(binder)
         return binder
     }
 
-    private fun startDownloadTask(binder: DownloadServiceBinder, file: File, mimeType: String):
-            Int {
+    private fun startDownloadTask(
+        binder: DownloadServiceBinder,
+        file: File,
+        mimeType: String
+    ): Int {
         return binder.requestDownload(
                 TestNetwork(),
                 TEST_USERAGENT,
@@ -425,7 +461,8 @@ class DownloadServiceTest {
                 file.name,
                 makeFileUri(file),
                 context,
-                mimeType)
+               mimeType
+        )
     }
 
     @Test
