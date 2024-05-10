@@ -15,6 +15,7 @@
 //
 
 package {
+    default_team: "trendy_team_fwk_core_networking",
     default_applicable_licenses: ["Android-Apache-2.0"],
 }
 
@@ -22,14 +23,20 @@ android_test {
     name: "CaptivePortalLoginTests",
     defaults: [
         "framework-connectivity-test-defaults",
-        "connectivity-mainline-presubmit-java-defaults",
     ],
-    srcs: ["src/**/*.java", "src/**/*.kt"],
+    srcs: [
+        "src/**/*.java",
+        "src/**/*.kt",
+    ],
     platform_apis: true,
     compile_multilib: "both",
-    min_sdk_version: "29",
-    target_sdk_version: "33", // Keep in sync with CaptivePortalLogin
-    test_suites: ["general-tests", "mts-networking"],
+    min_sdk_version: "30",
+    target_sdk_version: "34", // Keep in sync with CaptivePortalLogin
+    test_suites: [
+        "general-tests",
+        "mts-networking",
+    ],
+    test_config: "AndroidTest.xml",
 
     static_libs: [
         "androidx.test.rules",
@@ -41,6 +48,7 @@ android_test {
         "androidx.test.espresso.intents",
         "androidx.test.espresso.web",
         "androidx.test.ext.junit",
+        "collector-device-lib",
         "kotlin-test",
         "libnanohttpd",
         "net-tests-utils",

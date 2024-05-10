@@ -2,7 +2,7 @@
 <resources xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:xliff="urn:oasis:names:tc:xliff:document:1.2">
     <string name="app_name" msgid="9113573340518078598">"Início de sessão no portal cativo"</string>
-    <string name="action_use_network" msgid="8239049683838236305">"Utilizar esta rede como está"</string>
+    <string name="action_use_network" msgid="8239049683838236305">"Usar esta rede como está"</string>
     <string name="action_do_not_use_network" msgid="6324702363356892396">"Não utilizar esta rede"</string>
     <string name="action_bar_label" msgid="2023171629563754892">"Início de sessão na rede"</string>
     <string name="action_bar_title" msgid="2566334512545554724">"Iniciar sessão em %1$s"</string>
@@ -19,7 +19,7 @@
     <string name="ssl_error_unknown" msgid="3751419329218834886">"Erro de certificado desconhecido."</string>
     <string name="ssl_security_warning_title" msgid="7912335118289529802">"Aviso de segurança"</string>
     <string name="ssl_error_view_certificate" msgid="3447891108083278449">"Ver certificado"</string>
-    <string name="custom_scheme_warning" msgid="1809266150423969087">"A rede à qual pretende aceder está a solicitar a abertura de outra app."</string>
+    <string name="custom_scheme_warning" msgid="1809266150423969087">"A rede à qual quer aceder está a solicitar a abertura de outra app."</string>
     <string name="custom_scheme_example" msgid="7126568152528588592">"Por exemplo, a página de início de sessão pode exigir uma app específica para autenticação."</string>
     <string name="ok" msgid="6584612582120777209">"OK"</string>
     <string name="page_info_address" msgid="1290683284404217554">"Endereço:"</string>
