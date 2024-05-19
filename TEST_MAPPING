@@ -1,4 +1,14 @@
 {
+  "captiveportal-networkstack-resolve-tethering-mainline-presubmit": [
+    {
+      "name": "CaptivePortalLoginTests",
+      "options": [
+        {
+          "exclude-annotation": "com.android.testutils.SkipPresubmit"
+        }
+      ]
+    }
+  ],
   "presubmit": [
     {
       "name": "CaptivePortalLoginTests"
