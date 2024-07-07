@@ -30,7 +30,6 @@ java_defaults {
         "androidx.legacy_legacy-support-core-ui",
         "captiveportal-lib",
         "metrics-constants-protos",
-        "net-utils-device-common",
     ],
     libs: [
         "framework-connectivity",
