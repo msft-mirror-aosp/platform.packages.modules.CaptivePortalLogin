@@ -31,7 +31,7 @@ android_test {
     platform_apis: true,
     compile_multilib: "both",
     min_sdk_version: "30",
-    target_sdk_version: "34", // Keep in sync with CaptivePortalLogin
+    target_sdk_version: "35", // Keep in sync with CaptivePortalLogin
     test_suites: [
         "general-tests",
         "mts-networking",
