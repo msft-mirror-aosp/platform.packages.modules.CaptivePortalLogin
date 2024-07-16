@@ -326,7 +326,7 @@ public class DownloadService extends Service {
                     final InputStream is = connection.getInputStream();
 
                     if (!downloadToFile(is, fop, contentLength, task, nm)) {
-                        // Download cancelled
+                        Log.d(TAG, "Download cancelled, deleting " + task.mOutFile);
                         tryDeleteFile(task.mOutFile);
                         // Don't clear the notification: this will be done when the service stops
                         // (foreground service notifications cannot be cleared).
@@ -338,7 +338,7 @@ public class DownloadService extends Service {
                 updateNotification(nm, NOTE_DOWNLOAD_DONE, task.mMimeType,
                         makeDoneNotification(task));
             } catch (IOException e) {
-                Log.e(DownloadService.class.getSimpleName(), "Download error", e);
+                Log.e(TAG, "Download error, deleting " + task.mOutFile, e);
                 updateNotification(nm, NOTE_DOWNLOAD_DONE, task.mMimeType,
                         makeErrorNotification(task.mDisplayName));
                 tryDeleteFile(task.mOutFile);
