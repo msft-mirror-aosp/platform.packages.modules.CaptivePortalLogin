@@ -28,6 +28,7 @@ import android.os.Bundle
 import android.os.IBinder
 import android.os.Parcel
 import android.os.Parcelable
+import android.os.SystemClock
 import android.util.Log
 import android.widget.TextView
 import androidx.core.content.FileProvider
@@ -58,6 +59,7 @@ import java.util.concurrent.CompletableFuture
 import java.util.concurrent.SynchronousQueue
 import java.util.concurrent.TimeUnit.MILLISECONDS
 import kotlin.math.min
+import kotlin.random.Random
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
@@ -104,6 +106,8 @@ private val NOTIFICATION_SCROLL_POLL_MS = 100L
 private val TEST_WIFI_CONFIG_TYPE = "application/x-wifi-config"
 
 private val TAG = DownloadServiceTest::class.simpleName
+
+private val random = Random(SystemClock.elapsedRealtimeNanos())
 
 @Rule
 val mServiceRule = ServiceTestRule()
@@ -250,9 +254,9 @@ class DownloadServiceTest {
         testFilePath.mkdir()
         // Do not use File.createTempFile, as it generates very long filenames that may not
         // fit in notifications, making it difficult to find the right notification.
-        // currentTimeMillis would generally be 13 digits. Use the bottom 8 to fit the filename and
-        // a bit more text, even on very small screens (320 dp, minimum CDD size).
-        var index = System.currentTimeMillis().rem(100_000_000)
+        // Use 8 digits to fit the filename and a bit more text, even on very small screens (320 dp,
+        // minimum CDD size).
+        var index = random.nextInt(100_000_000)
         while (true) {
             val file = File(testFilePath, "tmp$index$extension")
             if (!file.exists()) {
