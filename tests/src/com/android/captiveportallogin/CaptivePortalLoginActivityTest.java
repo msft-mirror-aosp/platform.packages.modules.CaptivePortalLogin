@@ -234,15 +234,18 @@ public class CaptivePortalLoginActivityTest {
         int mDismissTimes;
         int mIgnoreTimes;
         int mUseTimes;
+        int mReevaluateTimes;
 
         private MockCaptivePortal() {
-            this(0, 0, 0);
+            this(0, 0, 0, 0);
         }
-        private MockCaptivePortal(int dismissTimes, int ignoreTimes, int useTimes) {
+        private MockCaptivePortal(int dismissTimes, int ignoreTimes, int useTimes,
+                int reevaluateTimes) {
             super(null);
             mDismissTimes = dismissTimes;
             mIgnoreTimes = ignoreTimes;
             mUseTimes = useTimes;
+            mReevaluateTimes = reevaluateTimes;
         }
         @Override
         public void reportCaptivePortalDismissed() {
@@ -260,17 +263,24 @@ public class CaptivePortalLoginActivityTest {
         }
 
         @Override
+        public void reevaluateNetwork() {
+            mReevaluateTimes++;
+        }
+
+        @Override
         public void writeToParcel(Parcel out, int flags) {
             out.writeInt(mDismissTimes);
             out.writeInt(mIgnoreTimes);
             out.writeInt(mUseTimes);
+            out.writeInt(mReevaluateTimes);
         }
 
         public static final Parcelable.Creator<MockCaptivePortal> CREATOR =
                 new Parcelable.Creator<MockCaptivePortal>() {
                 @Override
                 public MockCaptivePortal createFromParcel(Parcel in) {
-                    return new MockCaptivePortal(in.readInt(), in.readInt(), in.readInt());
+                    return new MockCaptivePortal(in.readInt(), in.readInt(), in.readInt(),
+                            in.readInt());
                 }
 
                 @Override
