@@ -24,13 +24,12 @@ java_defaults {
     srcs: ["src/**/*.java"],
     sdk_version: "module_current",
     min_sdk_version: "30",
-    target_sdk_version: "34", // Keep in sync with CaptivePortalLoginTests
+    target_sdk_version: "35", // Keep in sync with CaptivePortalLoginTests
     static_libs: [
         "androidx.annotation_annotation",
         "androidx.legacy_legacy-support-core-ui",
         "captiveportal-lib",
         "metrics-constants-protos",
-        "net-utils-device-common",
     ],
     libs: [
         "framework-connectivity",
