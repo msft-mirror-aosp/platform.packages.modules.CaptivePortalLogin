@@ -667,22 +667,10 @@ public class CaptivePortalLoginActivity extends Activity {
 
     private void reevaluateNetwork() {
         if (isNetworkValidationDismissEnabled()) {
-            // TODO : replace this with an actual call to the method when the network stack
-            // is built against a recent enough SDK.
-            if (callVoidMethodIfExists(mCaptivePortal, "reevaluateNetwork")) return;
+            mCaptivePortal.reevaluateNetwork();
+            return;
         }
         testForCaptivePortal();
-    }
-
-    private boolean callVoidMethodIfExists(@NonNull final Object target,
-            @NonNull final String methodName) {
-        try {
-            final Method method = target.getClass().getDeclaredMethod(methodName);
-            method.invoke(target);
-            return true;
-        } catch (ReflectiveOperationException e) {
-            return false;
-        }
     }
 
     private void testForCaptivePortal() {
