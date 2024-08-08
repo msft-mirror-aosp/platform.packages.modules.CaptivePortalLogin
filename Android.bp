@@ -21,22 +21,9 @@ package {
 
 java_defaults {
     name: "CaptivePortalLoginDefaults",
-    srcs: ["src/**/*.java"],
     sdk_version: "module_current",
     min_sdk_version: "30",
     target_sdk_version: "35", // Keep in sync with CaptivePortalLoginTests
-    static_libs: [
-        "androidx.annotation_annotation",
-        "androidx.legacy_legacy-support-core-ui",
-        "captiveportal-lib",
-        "metrics-constants-protos",
-    ],
-    libs: [
-        "framework-connectivity",
-        "framework-mediaprovider",
-        "framework-wifi",
-    ],
-    manifest: "AndroidManifest.xml",
     lint: {
         strict_updatability_linting: true,
     },
@@ -45,9 +32,51 @@ java_defaults {
     },
 }
 
+android_library {
+    name: "CaptivePortalLoginLib",
+    defaults: ["CaptivePortalLoginDefaults"],
+    srcs: ["src/**/*.java"],
+    static_libs: [
+        "androidx.annotation_annotation",
+        "androidx.browser_browser",
+        "androidx.legacy_legacy-support-core-ui",
+        "captiveportal-lib",
+        "metrics-constants-protos",
+        "net-utils-connectivity-apks",
+    ],
+    libs: [
+        "framework-connectivity",
+        "framework-mediaprovider",
+        "framework-wifi",
+    ],
+    manifest: "AndroidManifest.xml",
+}
+
+java_genrule {
+    name: "CaptivePortalLoginJarJarRules",
+    tool_files: [
+        ":CaptivePortalLoginLib{.jar}",
+        "jarjar-excludes.txt",
+    ],
+    tools: [
+        "jarjar-rules-generator",
+    ],
+    out: ["CaptivePortalLoginJarJarRules.txt"],
+    cmd: "$(location jarjar-rules-generator) " +
+        "$(location :CaptivePortalLoginLib{.jar}) " +
+        "--excludes $(location jarjar-excludes.txt) " +
+        "--prefix com.android.captiveportallogin " +
+        "--output $(out)",
+    visibility: [
+        "//packages/modules/CaptivePortalLogin:__subpackages__",
+    ],
+}
+
 android_app {
     name: "CaptivePortalLogin",
     defaults: ["CaptivePortalLoginDefaults"],
+    static_libs: ["CaptivePortalLoginLib"],
+    jarjar_rules: ":CaptivePortalLoginJarJarRules",
     certificate: "networkstack",
     updatable: true,
 }
@@ -55,7 +84,10 @@ android_app {
 android_library {
     name: "CaptivePortalLoginTestLib",
     defaults: ["CaptivePortalLoginDefaults"],
-    static_libs: ["net-tests-utils"],
+    static_libs: [
+        "CaptivePortalLoginLib",
+        "net-tests-utils",
+    ],
     lint: {
         strict_updatability_linting: true,
     },
@@ -66,6 +98,7 @@ android_library {
 android_app {
     name: "PlatformCaptivePortalLogin",
     defaults: ["CaptivePortalLoginDefaults"],
+    static_libs: ["CaptivePortalLoginLib"],
     certificate: "platform",
     overrides: ["CaptivePortalLogin"],
     lint: {
