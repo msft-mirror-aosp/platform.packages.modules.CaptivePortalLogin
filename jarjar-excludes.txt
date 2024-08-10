@@ -1,0 +1,5 @@
+# Exclude "androidx" package prefix, otherwise, some classes within this package
+# such as "androidx.startup.InitializationProvider" cannot be found when launching
+# the CaptivePortalActivity, also androidx is typically used by apps as-is so it
+# should not conflict with classes in the bootclasspath.
+androidx\..+
