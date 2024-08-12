@@ -8,7 +8,7 @@
     <string name="action_bar_title" msgid="2566334512545554724">"‏سجّل الدخول إلى %1$s"</string>
     <string name="ssl_error_warning" msgid="494203210316238046">"الشبكة التي تحاول الانضمام إليها بها مشاكل أمنية."</string>
     <string name="ssl_error_example" msgid="4574594291839092653">"على سبيل المثال، قد لا تنتمي صفحة تسجيل الدخول إلى المنظمة المعروضة."</string>
-    <string name="no_bypass_error_vpnwarning" msgid="5263739853101734851">"‏بالإضافة إلى ذلك، لا يمكن تجاوز هذا الخطأ لأن الجهاز يعمل الآن من خلال شبكة افتراضية خاصة (VPN)."</string>
+    <string name="no_bypass_error_vpnwarning" msgid="5263739853101734851">"‏بالإضافة إلى ذلك، لا يمكن تجاوز هذا الخطأ لأن الجهاز يعمل الآن من خلال شبكة VPN."</string>
     <string name="error_continue_via_browser" msgid="7091550471744444659">"المتابعة على أي حال باستخدام المتصفح"</string>
     <string name="ssl_error_untrusted" msgid="5183246242332501768">"هذه الشهادة ليست من جهة موثوق بها."</string>
     <string name="ssl_error_mismatch" msgid="5260665486390938291">"لا يتطابق اسم الموقع مع الاسم على الشهادة."</string>
