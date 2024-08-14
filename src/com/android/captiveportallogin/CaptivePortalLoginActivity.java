@@ -347,7 +347,7 @@ public class CaptivePortalLoginActivity extends Activity {
 
     @VisibleForTesting
     @Nullable
-    String getCustomTabsProviderPackage() {
+    String getDefaultCustomTabsProviderPackage() {
         return CustomTabsClient.getPackageName(getApplicationContext(), null /* packages */);
     }
 
@@ -397,8 +397,8 @@ public class CaptivePortalLoginActivity extends Activity {
     private String getCustomTabsProviderPackageIfEnabled() {
         if (!mCaptivePortalCustomTabsEnabled) return null;
 
-        final String packageName = getCustomTabsProviderPackage();
-        if (packageName == null) {
+        final String defaultPackageName = getDefaultCustomTabsProviderPackage();
+        if (defaultPackageName == null) {
             Log.w(TAG, "Default browser doesn't support custom tabs");
             return null;
         }
@@ -414,7 +414,7 @@ public class CaptivePortalLoginActivity extends Activity {
         //   WebView.
         // - check if privacy settings such as VPN/private DNS is bypassable, otherwise, fallback
         //   to WebView.
-        return packageName;
+        return defaultPackageName;
     }
 
     @Override
