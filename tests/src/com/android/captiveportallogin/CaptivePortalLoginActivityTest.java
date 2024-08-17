@@ -269,7 +269,7 @@ public class CaptivePortalLoginActivityTest {
         }
 
         @Override
-        String getCustomTabsProviderPackage() {
+        String getDefaultCustomTabsProviderPackage() {
             return TEST_CUSTOM_TABS_PACKAGE_NAME;
         }
 
