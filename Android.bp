@@ -45,9 +45,9 @@ android_library {
         "net-utils-connectivity-apks",
     ],
     libs: [
-        "framework-connectivity",
-        "framework-mediaprovider",
-        "framework-wifi",
+        "framework-connectivity.stubs.module_lib",
+        "framework-mediaprovider.stubs.module_lib",
+        "framework-wifi.stubs.module_lib",
     ],
     manifest: "AndroidManifest.xml",
 }
