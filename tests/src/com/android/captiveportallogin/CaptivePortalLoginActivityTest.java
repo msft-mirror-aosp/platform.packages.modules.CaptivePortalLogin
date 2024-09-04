@@ -27,15 +27,22 @@ import static android.net.ConnectivityManager.EXTRA_NETWORK;
 import static android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED;
 import static android.view.accessibility.AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED;
 
+import static androidx.browser.customtabs.CustomTabsCallback.NAVIGATION_STARTED;
+import static androidx.browser.customtabs.CustomTabsService.ACTION_CUSTOM_TABS_CONNECTION;
 import static androidx.lifecycle.Lifecycle.State.DESTROYED;
+import static androidx.test.espresso.intent.Intents.intended;
 import static androidx.test.espresso.intent.Intents.intending;
 import static androidx.test.espresso.intent.matcher.IntentMatchers.hasAction;
+import static androidx.test.espresso.intent.matcher.IntentMatchers.hasExtra;
+import static androidx.test.espresso.intent.matcher.IntentMatchers.hasData;
+import static androidx.test.espresso.intent.matcher.IntentMatchers.hasPackage;
 import static androidx.test.espresso.intent.matcher.IntentMatchers.isInternal;
 import static androidx.test.espresso.web.sugar.Web.onWebView;
 import static androidx.test.espresso.web.webdriver.DriverAtoms.findElement;
 import static androidx.test.espresso.web.webdriver.DriverAtoms.webClick;
 import static androidx.test.platform.app.InstrumentationRegistry.getInstrumentation;
 
+import static com.android.captiveportallogin.CaptivePortalLoginFlags.CAPTIVE_PORTAL_CUSTOM_TABS;
 import static com.android.captiveportallogin.DownloadService.DOWNLOAD_ABORTED_REASON_FILE_TOO_LARGE;
 import static com.android.testutils.TestNetworkTrackerKt.initTestNetwork;
 import static com.android.testutils.TestPermissionUtil.runAsShell;
@@ -45,6 +52,7 @@ import static junit.framework.Assert.assertNotNull;
 import static junit.framework.Assert.assertNull;
 
 import static org.hamcrest.CoreMatchers.not;
+import static org.hamcrest.core.AllOf.allOf;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
@@ -54,7 +62,9 @@ import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.anyInt;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -82,9 +92,13 @@ import android.os.Bundle;
 import android.os.ConditionVariable;
 import android.os.Parcel;
 import android.os.Parcelable;
+import android.util.ArrayMap;
 import android.view.accessibility.AccessibilityEvent;
 import android.widget.Toast;
 
+import androidx.browser.customtabs.CustomTabsCallback;
+import androidx.browser.customtabs.CustomTabsClient;
+import androidx.browser.customtabs.CustomTabsServiceConnection;
 import androidx.test.core.app.ActivityScenario;
 import androidx.test.espresso.intent.Intents;
 import androidx.test.espresso.web.webdriver.Locator;
@@ -97,9 +111,12 @@ import androidx.test.uiautomator.UiSelector;
 
 import com.android.testutils.SkipPresubmit;
 import com.android.testutils.TestNetworkTracker;
+import com.android.testutils.com.android.testutils.SetFeatureFlagsRule;
+import com.android.testutils.com.android.testutils.SetFeatureFlagsRule.FeatureFlag;
 
 import org.junit.After;
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.ArgumentCaptor;
@@ -136,7 +153,10 @@ public class CaptivePortalLoginActivityTest {
     private static final String TEST_USERAGENT = "Test/42.0 Unit-test";
     private static final String TEST_FRIENDLY_NAME = "Network friendly name";
     private static final String TEST_PORTAL_HOSTNAME = "localhost";
+    private static final String TEST_CUSTOM_TABS_PACKAGE_NAME = "com.android.customtabs";
     private static final String TEST_WIFI_CONFIG_TYPE = "application/x-wifi-config";
+    private static final String TEST_DOWNLOAD_SERVICE_COMPONENT_CLASS_NAME =
+            DownloadService.class.getName();
     private ActivityScenario<InstrumentedCaptivePortalLoginActivity> mActivityScenario;
     private Network mNetwork = new Network(TEST_NETID);
     private TestNetworkTracker mTestNetworkTracker;
@@ -146,6 +166,14 @@ public class CaptivePortalLoginActivityTest {
     private static ConnectivityManager sConnectivityManager;
     private static DevicePolicyManager sMockDevicePolicyManager;
     private static DownloadService.DownloadServiceBinder sDownloadServiceBinder;
+    private static CustomTabsClient sMockCustomTabsClient;
+    private static ArrayMap<String, Boolean> sFeatureFlags = new ArrayMap<>();
+    @Rule
+    public final SetFeatureFlagsRule mSetFeatureFlagsRule =
+            new SetFeatureFlagsRule((name, enabled) -> {
+                sFeatureFlags.put(name, enabled);
+                return null;
+            }, (name) -> sFeatureFlags.getOrDefault(name, false));
 
     public static class InstrumentedCaptivePortalLoginActivity extends CaptivePortalLoginActivity {
         private final ConditionVariable mDestroyedCv = new ConditionVariable(false);
@@ -154,7 +182,9 @@ public class CaptivePortalLoginActivityTest {
         private final CompletableFuture<Intent> mOpenInBrowserIntent =
                 new CompletableFuture<>();
         private Intent mServiceIntent = new Intent();
-        private final CompletableFuture<ServiceConnection> mServiceBound =
+        private final CompletableFuture<ServiceConnection> mDownloadServiceBound =
+                new CompletableFuture<>();
+        private final CompletableFuture<CustomTabsServiceConnection> mCustomTabsServiceBound =
                 new CompletableFuture<>();
         private final ConditionVariable mDlServiceunbindCv = new ConditionVariable(false);
 
@@ -198,11 +228,21 @@ public class CaptivePortalLoginActivityTest {
 
         @Override
         public boolean bindService(Intent service, ServiceConnection conn, int flags) {
-            assertTrue("Multiple foreground services were bound during the test",
-                    mServiceBound.complete(conn));
-            getMainThreadHandler().post(() -> conn.onServiceConnected(
-                    getInstrumentation().getComponentName(), sDownloadServiceBinder));
-
+            if (service.getAction() == null
+                    && service.getComponent().getClassName().equals(
+                            TEST_DOWNLOAD_SERVICE_COMPONENT_CLASS_NAME)) {
+                assertTrue("Download foreground service was bound multiple times during the test",
+                        mDownloadServiceBound.complete(conn));
+                getMainThreadHandler().post(() -> conn.onServiceConnected(
+                        getInstrumentation().getComponentName(), sDownloadServiceBinder));
+            } else if (service.getAction().equals(ACTION_CUSTOM_TABS_CONNECTION)) {
+                assertTrue("CustomTabs foreground service was bound multiple times during the test",
+                        mCustomTabsServiceBound.complete((CustomTabsServiceConnection) conn));
+                getMainThreadHandler().post(() -> {
+                    ((CustomTabsServiceConnection) conn).onCustomTabsServiceConnected(
+                            getInstrumentation().getComponentName(), sMockCustomTabsClient);
+                });
+            }
             return true;
         }
 
@@ -226,6 +266,17 @@ public class CaptivePortalLoginActivityTest {
         String getFileProviderAuthority() {
             // Matches the test provider in the test app manifest
             return "com.android.captiveportallogin.tests.fileprovider";
+        }
+
+        @Override
+        String getDefaultCustomTabsProviderPackage() {
+            return TEST_CUSTOM_TABS_PACKAGE_NAME;
+        }
+
+        @Override
+        boolean isFeatureEnabled(final String name) {
+            if (sFeatureFlags.get(name) == null) return false;
+            return sFeatureFlags.get(name);
         }
     }
 
@@ -296,6 +347,7 @@ public class CaptivePortalLoginActivityTest {
         sConnectivityManager = spy(context.getSystemService(ConnectivityManager.class));
         sMockDevicePolicyManager = mock(DevicePolicyManager.class);
         sDownloadServiceBinder = mock(DownloadService.DownloadServiceBinder.class);
+        sMockCustomTabsClient = mock(CustomTabsClient.class);
 
         MockitoAnnotations.initMocks(this);
         // Use a real (but test) network for the application. The application will pass this
@@ -365,9 +417,6 @@ public class CaptivePortalLoginActivityTest {
             activity.sendBroadcast(new Intent(Intent.ACTION_CLOSE_SYSTEM_DIALOGS));
         });
         getInstrumentation().waitForIdleSync();
-
-        // Initialize intent capturing after launching the activity to avoid capturing extra intents
-        Intents.init();
     }
 
     @Test
@@ -434,6 +483,10 @@ public class CaptivePortalLoginActivityTest {
     @Test
     public void testHasVpnNetwork() throws Exception {
         initActivity(TEST_URL);
+        // Initialize intent capturing after launching the activity to avoid capturing extra
+        // intents.
+        Intents.init();
+
         // Test non-vpn case.
         configNonVpnNetwork();
         mActivityScenario.onActivity(activity -> assertFalse(activity.hasVpnNetwork()));
@@ -446,6 +499,10 @@ public class CaptivePortalLoginActivityTest {
     @Test
     public void testIsAlwaysOnVpnEnabled() throws Exception {
         initActivity(TEST_URL);
+        // Initialize intent capturing after launching the activity to avoid capturing extra
+        // intents.
+        Intents.init();
+
         doReturn(false).when(sMockDevicePolicyManager).isAlwaysOnVpnLockdownEnabled(any());
         mActivityScenario.onActivity(activity -> assertFalse(activity.isAlwaysOnVpnEnabled()));
 
@@ -455,6 +512,10 @@ public class CaptivePortalLoginActivityTest {
 
     private void runVpnMsgOrLinkToBrowser(boolean useVpnMatcher) {
         initActivity(TEST_URL);
+        // Initialize intent capturing after launching the activity to avoid capturing extra
+        // intents.
+        Intents.init();
+
         // Test non-vpn case.
         configNonVpnNetwork();
         doReturn(false).when(sMockDevicePolicyManager).isAlwaysOnVpnLockdownEnabled(any());
@@ -533,6 +594,10 @@ public class CaptivePortalLoginActivityTest {
     @Test @SdkSuppress(minSdkVersion = Build.VERSION_CODES.R)
     public void testNetworkCapabilitiesUpdate_RAndLater() throws Exception {
         initActivity(TEST_URL);
+        // Initialize intent capturing after launching the activity to avoid capturing extra
+        // intents.
+        Intents.init();
+
         // NetworkCapabilities updates w/o NET_CAPABILITY_VALIDATED.
         final NetworkCapabilities nc = new NetworkCapabilities();
         notifyValidatedChangedNotDone(nc);
@@ -550,6 +615,10 @@ public class CaptivePortalLoginActivityTest {
     @Test @SdkSuppress(maxSdkVersion = Build.VERSION_CODES.Q)
     public void testNetworkCapabilitiesUpdate_Q() throws Exception {
         initActivity(TEST_URL);
+        // Initialize intent capturing after launching the activity to avoid capturing extra
+        // intents.
+        Intents.init();
+
         final NetworkCapabilities nc = new NetworkCapabilities();
         nc.setCapability(NET_CAPABILITY_VALIDATED, true);
         // Auto-dismiss should not happen.
@@ -564,6 +633,9 @@ public class CaptivePortalLoginActivityTest {
         server.start();
         ActivityScenario.launch(RequestDismissKeyguardActivity.class);
         initActivity(server.makeUrl(TEST_URL_QUERY));
+        // Initialize intent capturing after launching the activity to avoid capturing extra
+        // intents.
+        Intents.init();
         // Mock all external intents
         intending(not(isInternal())).respondWith(new ActivityResult(RESULT_OK, null));
 
@@ -642,6 +714,9 @@ public class CaptivePortalLoginActivityTest {
 
         ActivityScenario.launch(RequestDismissKeyguardActivity.class);
         initActivity(server.makeUrl(TEST_URL_QUERY));
+        // Initialize intent capturing after launching the activity to avoid capturing extra
+        // intents.
+        Intents.init();
 
         // Create a mock file to be returned when mocking the file chooser
         final Intent mockFileResponse = new Intent();
@@ -700,6 +775,9 @@ public class CaptivePortalLoginActivityTest {
         when(sConnectivityManager.getLinkProperties(mNetwork)).thenReturn(linkProperties);
         configNonVpnNetwork();
         initActivity("https://tc.example.com/");
+        // Initialize intent capturing after launching the activity to avoid capturing extra
+        // intents.
+        Intents.init();
 
         // Verify that the correct venue friendly name is used
         mActivityScenario.onActivity(activity ->
@@ -711,6 +789,9 @@ public class CaptivePortalLoginActivityTest {
     public void testWifiSsid_Q() throws Exception {
         configNonVpnNetwork();
         initActivity("https://portal.example.com/");
+        // Initialize intent capturing after launching the activity to avoid capturing extra
+        // intents.
+        Intents.init();
         mActivityScenario.onActivity(activity ->
                 assertEquals(activity.getActionBar().getTitle(),
                         getInstrumentation().getContext().getString(R.string.action_bar_title,
@@ -722,6 +803,9 @@ public class CaptivePortalLoginActivityTest {
     public void testWifiSsid() throws Exception {
         configNonVpnNetwork();
         initActivity("https://portal.example.com/");
+        // Initialize intent capturing after launching the activity to avoid capturing extra
+        // intents.
+        Intents.init();
         mActivityScenario.onActivity(activity ->
                 assertEquals(activity.getActionBar().getTitle(),
                         getInstrumentation().getContext().getString(R.string.action_bar_title,
@@ -846,6 +930,9 @@ public class CaptivePortalLoginActivityTest {
 
         ActivityScenario.launch(RequestDismissKeyguardActivity.class);
         initActivity(server.makeUrl(TEST_URL_QUERY));
+        // Initialize intent capturing after launching the activity to avoid capturing extra
+        // intents.
+        Intents.init();
         return server;
     }
 
@@ -908,6 +995,9 @@ public class CaptivePortalLoginActivityTest {
     @Test
     public void testDirectlyOpen_onDownloadAborted() throws Exception {
         initActivity(TEST_URL);
+        // Initialize intent capturing after launching the activity to avoid capturing extra
+        // intents.
+        Intents.init();
         final Uri mockFile = Uri.parse("content://mockdata");
         final String expectMsg = getInstrumentation().getContext().getString(
                 R.string.file_too_large_cancel_download);
@@ -1016,5 +1106,69 @@ public class CaptivePortalLoginActivityTest {
         assertTrue(spinner.waitUntilGone(TEST_TIMEOUT_MS));
 
         server.stop();
+    }
+
+    @Test
+    @FeatureFlag(name = CAPTIVE_PORTAL_CUSTOM_TABS, enabled = true)
+    public void testCaptivePortalUsingCustomTabs() throws Exception {
+        final LinkProperties linkProperties = new LinkProperties();
+        doReturn(linkProperties).when(sConnectivityManager).getLinkProperties(mNetwork);
+
+        // Set up result stubbing for the CustomTabsIntent#launchUrl, this stub should be
+        // initialized before starting CaptivePortalLoginActivity, otherwise, no activity
+        // found to handle the CustomTabsIntent.
+        Intents.init();
+        intending(hasPackage(TEST_CUSTOM_TABS_PACKAGE_NAME))
+                .respondWith(new ActivityResult(RESULT_OK, null));
+        initActivity(TEST_URL);
+
+        final ArgumentCaptor<CustomTabsCallback> captor =
+                ArgumentCaptor.forClass(CustomTabsCallback.class);
+        verify(sMockCustomTabsClient).newSession(captor.capture());
+        final CustomTabsCallback callback = captor.getValue();
+        assertNotNull(callback);
+        intended(allOf(
+                hasExtra(Intent.EXTRA_REFERRER, Uri.parse("")),
+                // TODO: replace with CustomTabsIntent.EXTRA_NETWORK.
+                hasExtra(CaptivePortalLoginActivity.EXTRA_NETWORK, mNetwork),
+                hasData(Uri.parse(TEST_URL))));
+
+        // Send navigation start event, verify if the network will be reevaluated.
+        callback.onNavigationEvent(NAVIGATION_STARTED, null /* extras */);
+        final MockCaptivePortal cp = getCaptivePortal();
+        assertEquals(1, cp.mReevaluateTimes);
+    }
+
+    @Test
+    @FeatureFlag(name = CAPTIVE_PORTAL_CUSTOM_TABS, enabled = false)
+    public void testCaptivePortalUsingCustomTabs_flagOff() throws Exception {
+        // Set up result stubbing for the CustomTabsIntent#launchUrl, however, the
+        // feature flag is off, therefore, WebView should be used.
+        Intents.init();
+        intending(hasPackage(TEST_CUSTOM_TABS_PACKAGE_NAME))
+                .respondWith(new ActivityResult(RESULT_OK, null));
+        initActivity(TEST_URL);
+        verify(sConnectivityManager).bindProcessToNetwork(any());
+        verify(sMockCustomTabsClient, never()).newSession(any());
+        mActivityScenario.onActivity(activity ->
+                assertNotNull(activity.findViewById(R.id.webview)));
+    }
+
+    @Test
+    @FeatureFlag(name = CAPTIVE_PORTAL_CUSTOM_TABS, enabled = true)
+    public void testCaptivePortalUsingCustomTabs_nullLinkProperties() throws Exception {
+        final Context context = getInstrumentation().getContext();
+        doReturn(null).when(sConnectivityManager).getLinkProperties(mNetwork);
+
+        // Set up result stubbing for the CustomTabsIntent#launchUrl, however, due to the
+        // LinkProperties is null, WebView should be used.
+        Intents.init();
+        intending(hasPackage(TEST_CUSTOM_TABS_PACKAGE_NAME))
+                .respondWith(new ActivityResult(RESULT_OK, null));
+        initActivity(TEST_URL);
+        verify(sConnectivityManager).bindProcessToNetwork(any());
+        verify(sMockCustomTabsClient, never()).newSession(any());
+        mActivityScenario.onActivity(activity ->
+                assertNotNull(activity.findViewById(R.id.webview)));
     }
 }
