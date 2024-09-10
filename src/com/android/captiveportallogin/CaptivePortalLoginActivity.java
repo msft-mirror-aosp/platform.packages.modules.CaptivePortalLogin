@@ -161,9 +161,6 @@ public class CaptivePortalLoginActivity extends Activity {
     // Ensures that done() happens once exactly, handling concurrent callers with atomic operations.
     private final AtomicBoolean isDone = new AtomicBoolean(false);
 
-    // TODO: b/330670424 - import "CustomTabsIntent.EXTRA_NETWORK" directly when it becomes public.
-    @VisibleForTesting
-    static final String EXTRA_NETWORK = "androidx.browser.customtabs.extra.NETWORK";
     private final CustomTabsCallback mCustomTabsCallback = new CustomTabsCallback() {
         @Override
         public void onNavigationEvent(int navigationEvent, @Nullable Bundle extras) {
@@ -186,6 +183,7 @@ public class CaptivePortalLoginActivity extends Activity {
                         // again.
                         final CustomTabsIntent customTabsIntent =
                                 new CustomTabsIntent.Builder(session)
+                                        .setNetwork(mNetwork)
                                         .build();
 
                         // Remove Referrer Header from HTTP probe packet by setting an empty Uri
@@ -194,9 +192,6 @@ public class CaptivePortalLoginActivity extends Activity {
                         final String emptyReferrer = "";
                         customTabsIntent.intent.putExtra(Intent.EXTRA_REFERRER,
                                 Uri.parse(emptyReferrer));
-                        // TODO: b/330670424 - call CustomTabsClient.Builder API to specify the
-                        // target network instead of using intent extra.
-                        customTabsIntent.intent.putExtra(EXTRA_NETWORK, mNetwork);
                         customTabsIntent.launchUrl(CaptivePortalLoginActivity.this,
                                 Uri.parse(mUrl.toString()));
                     }
