@@ -165,7 +165,7 @@ public class CaptivePortalLoginActivity extends Activity {
         @Override
         public void onNavigationEvent(int navigationEvent, @Nullable Bundle extras) {
             if (navigationEvent == NAVIGATION_STARTED) {
-                reevaluateNetwork();
+                mCaptivePortal.reevaluateNetwork();
             }
         }
     };
@@ -516,23 +516,10 @@ public class CaptivePortalLoginActivity extends Activity {
     @VisibleForTesting
     void handleCapabilitiesChanged(@NonNull final Network network,
             @NonNull final NetworkCapabilities nc) {
-        if (!isNetworkValidationDismissEnabled()) {
-            return;
-        }
-
         if (network.equals(mNetwork) && nc.hasCapability(NET_CAPABILITY_VALIDATED)) {
             // Dismiss when login is no longer needed since network has validated, exit.
             done(Result.DISMISSED);
         }
-    }
-
-    /**
-     * Indicates whether network validation (NET_CAPABILITY_VALIDATED) should be used to determine
-     * when the portal should be dismissed, instead of having the CaptivePortalLoginActivity use
-     * its own probe.
-     */
-    private boolean isNetworkValidationDismissEnabled() {
-        return true;
     }
 
     // Find WebView's proxy BroadcastReceiver and prompt it to read proxy system properties.
@@ -767,58 +754,6 @@ public class CaptivePortalLoginActivity extends Activity {
         return SystemProperties.getInt("ro.debuggable", 0) == 1;
     }
 
-    private void reevaluateNetwork() {
-        if (isNetworkValidationDismissEnabled()) {
-            mCaptivePortal.reevaluateNetwork();
-            return;
-        }
-        testForCaptivePortal();
-    }
-
-    private void testForCaptivePortal() {
-        // TODO: NetworkMonitor validation is used on R+ instead; remove when dropping Q support.
-        new Thread(new Runnable() {
-            public void run() {
-                // Give time for captive portal to open.
-                try {
-                    Thread.sleep(1000);
-                } catch (InterruptedException e) {
-                }
-                HttpURLConnection urlConnection = null;
-                int httpResponseCode = 500;
-                String locationHeader = null;
-                try {
-                    urlConnection = (HttpURLConnection) mNetwork.openConnection(mUrl);
-                    urlConnection.setInstanceFollowRedirects(false);
-                    urlConnection.setConnectTimeout(SOCKET_TIMEOUT_MS);
-                    urlConnection.setReadTimeout(SOCKET_TIMEOUT_MS);
-                    urlConnection.setUseCaches(false);
-                    if (mUserAgent != null) {
-                       urlConnection.setRequestProperty("User-Agent", mUserAgent);
-                    }
-                    // cannot read request header after connection
-                    String requestHeader = urlConnection.getRequestProperties().toString();
-
-                    urlConnection.getInputStream();
-                    httpResponseCode = urlConnection.getResponseCode();
-                    locationHeader = urlConnection.getHeaderField(HTTP_LOCATION_HEADER_NAME);
-                    if (DBG) {
-                        Log.d(TAG, "probe at " + mUrl +
-                                " ret=" + httpResponseCode +
-                                " request=" + requestHeader +
-                                " headers=" + urlConnection.getHeaderFields());
-                    }
-                } catch (IOException e) {
-                } finally {
-                    if (urlConnection != null) urlConnection.disconnect();
-                }
-                if (isDismissed(httpResponseCode, locationHeader, mProbeSpec)) {
-                    done(Result.DISMISSED);
-                }
-            }
-        }).start();
-    }
-
     private static boolean isDismissed(
             int httpResponseCode, String locationHeader, CaptivePortalProbeSpec probeSpec) {
         return (probeSpec != null)
@@ -890,7 +825,7 @@ public class CaptivePortalLoginActivity extends Activity {
                 getActionBar().setSubtitle(subtitle);
             }
             getProgressBar().setVisibility(View.VISIBLE);
-            reevaluateNetwork();
+            mCaptivePortal.reevaluateNetwork();
         }
 
         @Override
@@ -912,7 +847,7 @@ public class CaptivePortalLoginActivity extends Activity {
                 view.requestFocus();
                 view.clearHistory();
             }
-            reevaluateNetwork();
+            mCaptivePortal.reevaluateNetwork();
         }
 
         // Convert Android scaled-pixels (sp) to HTML size.
