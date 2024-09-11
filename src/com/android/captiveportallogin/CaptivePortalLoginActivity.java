@@ -532,11 +532,7 @@ public class CaptivePortalLoginActivity extends Activity {
      * its own probe.
      */
     private boolean isNetworkValidationDismissEnabled() {
-        return isAtLeastR();
-    }
-
-    private boolean isAtLeastR() {
-        return Build.VERSION.SDK_INT > Build.VERSION_CODES.Q;
+        return true;
     }
 
     // Find WebView's proxy BroadcastReceiver and prompt it to read proxy system properties.
@@ -990,7 +986,7 @@ public class CaptivePortalLoginActivity extends Activity {
             // Before Android R, CaptivePortalLogin cannot call the isAlwaysOnVpnLockdownEnabled()
             // to get the status of VPN always-on due to permission denied. So adding a version
             // check here to prevent CaptivePortalLogin crashes.
-            if (hasVpnNetwork() || (isAtLeastR() && isAlwaysOnVpnEnabled())) {
+            if (hasVpnNetwork() || isAlwaysOnVpnEnabled()) {
                 final String vpnWarning = getString(R.string.no_bypass_error_vpnwarning);
                 return "  <div class=vpnwarning>" + vpnWarning + "</div><br>";
             }
@@ -1358,9 +1354,6 @@ public class CaptivePortalLoginActivity extends Activity {
     }
 
     private CharSequence getVenueFriendlyName() {
-        if (!isAtLeastR()) {
-            return null;
-        }
         final LinkProperties linkProperties = mCm.getLinkProperties(mNetwork);
         if (linkProperties == null) {
             return null;
