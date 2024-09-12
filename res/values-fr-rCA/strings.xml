@@ -19,8 +19,8 @@
     <string name="ssl_error_unknown" msgid="3751419329218834886">"Erreur de certificat inconnue."</string>
     <string name="ssl_security_warning_title" msgid="7912335118289529802">"Avertissement de sécurité"</string>
     <string name="ssl_error_view_certificate" msgid="3447891108083278449">"Afficher le certificat"</string>
-    <string name="custom_scheme_warning" msgid="1809266150423969087">"Le réseau que vous tentez de joindre demande l\'ouverture d\'une autre appli."</string>
-    <string name="custom_scheme_example" msgid="7126568152528588592">"Par exemple, la page de connexion pourrait exiger une appli particulière pour effectuer l\'authentification"</string>
+    <string name="custom_scheme_warning" msgid="1809266150423969087">"Le réseau que vous tentez de joindre demande l\'ouverture d\'une autre application."</string>
+    <string name="custom_scheme_example" msgid="7126568152528588592">"Par exemple, la page de connexion pourrait exiger une application particulière pour effectuer l\'authentification"</string>
     <string name="ok" msgid="6584612582120777209">"OK"</string>
     <string name="page_info_address" msgid="1290683284404217554">"Adresse :"</string>
     <string name="page_info" msgid="46593086046896385">"Renseignements sur la page"</string>
