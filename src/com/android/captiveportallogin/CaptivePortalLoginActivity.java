@@ -19,6 +19,9 @@ package com.android.captiveportallogin;
 import static android.net.ConnectivityManager.EXTRA_CAPTIVE_PORTAL_PROBE_SPEC;
 import static android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED;
 
+import static androidx.browser.customtabs.CustomTabsCallback.NAVIGATION_STARTED;
+
+import static com.android.captiveportallogin.CaptivePortalLoginFlags.CAPTIVE_PORTAL_CUSTOM_TABS;
 import static com.android.captiveportallogin.DownloadService.isDirectlyOpenType;
 
 import android.app.Activity;
@@ -86,10 +89,16 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.StringRes;
 import androidx.annotation.VisibleForTesting;
+import androidx.browser.customtabs.CustomTabsCallback;
+import androidx.browser.customtabs.CustomTabsClient;
+import androidx.browser.customtabs.CustomTabsIntent;
+import androidx.browser.customtabs.CustomTabsServiceConnection;
+import androidx.browser.customtabs.CustomTabsSession;
 import androidx.core.content.FileProvider;
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 
 import com.android.internal.logging.nano.MetricsProto.MetricsEvent;
+import com.android.net.module.util.DeviceConfigUtils;
 
 import java.io.File;
 import java.io.FileNotFoundException;
@@ -146,8 +155,52 @@ public class CaptivePortalLoginActivity extends Activity {
     private boolean mLaunchBrowser = false;
     private MyWebViewClient mWebViewClient;
     private SwipeRefreshLayout mSwipeRefreshLayout;
+    // This member is just used in the UI thread model(e.g. onCreate and onDestroy), so non-final
+    // should be fine.
+    private boolean mCaptivePortalCustomTabsEnabled;
     // Ensures that done() happens once exactly, handling concurrent callers with atomic operations.
     private final AtomicBoolean isDone = new AtomicBoolean(false);
+
+    private final CustomTabsCallback mCustomTabsCallback = new CustomTabsCallback() {
+        @Override
+        public void onNavigationEvent(int navigationEvent, @Nullable Bundle extras) {
+            if (navigationEvent == NAVIGATION_STARTED) {
+                mCaptivePortal.reevaluateNetwork();
+            }
+        }
+    };
+
+    private final CustomTabsServiceConnection mCustomTabsServiceConnection =
+            new CustomTabsServiceConnection() {
+                    @Override
+                    public void onCustomTabsServiceConnected(@NonNull ComponentName name,
+                            @NonNull CustomTabsClient client) {
+                        Log.d(TAG, "CustomTabs service connected");
+                        final CustomTabsSession session = client.newSession(mCustomTabsCallback);
+                        // The application package name that will resolve to the CustomTabs intent
+                        // has been set in {@Link CustomTabsIntent.Builder} constructor, unnecessary
+                        // to call {@Link Intent#setPackage} to explicitly specify the package name
+                        // again.
+                        final CustomTabsIntent customTabsIntent =
+                                new CustomTabsIntent.Builder(session)
+                                        .setNetwork(mNetwork)
+                                        .build();
+
+                        // Remove Referrer Header from HTTP probe packet by setting an empty Uri
+                        // instance in EXTRA_REFERRER, make sure users using custom tabs have the
+                        // same experience as the custom tabs browser.
+                        final String emptyReferrer = "";
+                        customTabsIntent.intent.putExtra(Intent.EXTRA_REFERRER,
+                                Uri.parse(emptyReferrer));
+                        customTabsIntent.launchUrl(CaptivePortalLoginActivity.this,
+                                Uri.parse(mUrl.toString()));
+                    }
+
+                    @Override
+                    public void onServiceDisconnected(ComponentName componentName) {
+                        Log.d(TAG, "CustomTabs service disconnected");
+                    }
+            };
 
     // When starting downloads a file is created via startActivityForResult(ACTION_CREATE_DOCUMENT).
     // This array keeps the download request until the activity result is received. It is keyed by
@@ -226,6 +279,11 @@ public class CaptivePortalLoginActivity extends Activity {
         }
     };
 
+    @VisibleForTesting
+    boolean isFeatureEnabled(final String name) {
+        return DeviceConfigUtils.isCaptivePortalLoginFeatureEnabled(getApplicationContext(), name);
+    }
+
     private void maybeStartPendingDownloads() {
         ensureRunningOnMainThread();
 
@@ -282,9 +340,84 @@ public class CaptivePortalLoginActivity extends Activity {
         }
     }
 
+    @VisibleForTesting
+    @Nullable
+    String getDefaultCustomTabsProviderPackage() {
+        return CustomTabsClient.getPackageName(getApplicationContext(), null /* packages */);
+    }
+
+    private void initializeWebView() {
+        // Also initializes proxy system properties.
+        mNetwork = mNetwork.getPrivateDnsBypassingCopy();
+        mCm.bindProcessToNetwork(mNetwork);
+
+        // Proxy system properties must be initialized before setContentView is called
+        // because setContentView initializes the WebView logic which in turn reads the
+        // system properties.
+        setContentView(R.layout.activity_captive_portal_login);
+
+        getActionBar().setDisplayShowHomeEnabled(false);
+        getActionBar().setElevation(0); // remove shadow
+        getActionBar().setTitle(getHeaderTitle());
+        getActionBar().setSubtitle("");
+
+        final WebView webview = getWebview();
+        webview.clearCache(true);
+        CookieManager.getInstance().setAcceptThirdPartyCookies(webview, true);
+        WebSettings webSettings = webview.getSettings();
+        webSettings.setJavaScriptEnabled(true);
+        webSettings.setMixedContentMode(WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
+        webSettings.setUseWideViewPort(true);
+        webSettings.setLoadWithOverviewMode(true);
+        webSettings.setSupportZoom(true);
+        webSettings.setBuiltInZoomControls(true);
+        webSettings.setDisplayZoomControls(false);
+        webSettings.setDomStorageEnabled(true);
+        mWebViewClient = new MyWebViewClient();
+        webview.setWebViewClient(mWebViewClient);
+        webview.setWebChromeClient(new MyWebChromeClient());
+        webview.setDownloadListener(new PortalDownloadListener());
+        // Start initial page load so WebView finishes loading proxy settings.
+        // Actual load of mUrl is initiated by MyWebViewClient.
+        webview.loadData("", "text/html", null);
+
+        mSwipeRefreshLayout = findViewById(R.id.swipe_refresh);
+        mSwipeRefreshLayout.setOnRefreshListener(() -> {
+            webview.reload();
+            mSwipeRefreshLayout.setRefreshing(true);
+        });
+    }
+
+    @Nullable
+    private String getCustomTabsProviderPackageIfEnabled() {
+        if (!mCaptivePortalCustomTabsEnabled) return null;
+
+        final String defaultPackageName = getDefaultCustomTabsProviderPackage();
+        if (defaultPackageName == null) {
+            Log.w(TAG, "Default browser doesn't support custom tabs");
+            return null;
+        }
+
+        final LinkProperties lp = mCm.getLinkProperties(mNetwork);
+        if (lp == null || lp.getPrivateDnsServerName() != null) {
+            Log.w(TAG, "Do not use custom tabs if private DNS (strict mode) is enabled");
+            return null;
+        }
+
+        // TODO: b/330670424
+        // - check if the default browser has supported the multi-network, otherwise, fallback to
+        //   WebView.
+        // - check if privacy settings such as VPN/private DNS is bypassable, otherwise, fallback
+        //   to WebView.
+        return defaultPackageName;
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        // Initialize the feature flag after CaptivePortalLoginActivity is created, otherwise, the
+        // context is still null and throw NPE when fetching the package manager from context.
+        mCaptivePortalCustomTabsEnabled = isFeatureEnabled(CAPTIVE_PORTAL_CUSTOM_TABS);
         mCaptivePortal = getIntent().getParcelableExtra(ConnectivityManager.EXTRA_CAPTIVE_PORTAL);
         // Null CaptivePortal is unexpected. The following flow will need to access mCaptivePortal
         // to communicate with system. Thus, finish the activity.
@@ -340,44 +473,13 @@ public class CaptivePortalLoginActivity extends Activity {
             return;
         }
 
-        // Also initializes proxy system properties.
-        mNetwork = mNetwork.getPrivateDnsBypassingCopy();
-        mCm.bindProcessToNetwork(mNetwork);
-
-        // Proxy system properties must be initialized before setContentView is called because
-        // setContentView initializes the WebView logic which in turn reads the system properties.
-        setContentView(R.layout.activity_captive_portal_login);
-
-        getActionBar().setDisplayShowHomeEnabled(false);
-        getActionBar().setElevation(0); // remove shadow
-        getActionBar().setTitle(getHeaderTitle());
-        getActionBar().setSubtitle("");
-
-        final WebView webview = getWebview();
-        webview.clearCache(true);
-        CookieManager.getInstance().setAcceptThirdPartyCookies(webview, true);
-        WebSettings webSettings = webview.getSettings();
-        webSettings.setJavaScriptEnabled(true);
-        webSettings.setMixedContentMode(WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
-        webSettings.setUseWideViewPort(true);
-        webSettings.setLoadWithOverviewMode(true);
-        webSettings.setSupportZoom(true);
-        webSettings.setBuiltInZoomControls(true);
-        webSettings.setDisplayZoomControls(false);
-        webSettings.setDomStorageEnabled(true);
-        mWebViewClient = new MyWebViewClient();
-        webview.setWebViewClient(mWebViewClient);
-        webview.setWebChromeClient(new MyWebChromeClient());
-        webview.setDownloadListener(new PortalDownloadListener());
-        // Start initial page load so WebView finishes loading proxy settings.
-        // Actual load of mUrl is initiated by MyWebViewClient.
-        webview.loadData("", "text/html", null);
-
-        mSwipeRefreshLayout = findViewById(R.id.swipe_refresh);
-        mSwipeRefreshLayout.setOnRefreshListener(() -> {
-                webview.reload();
-                mSwipeRefreshLayout.setRefreshing(true);
-            });
+        final String customTabsProviderPackage = getCustomTabsProviderPackageIfEnabled();
+        if (customTabsProviderPackage == null) {
+            initializeWebView();
+        } else {
+            CustomTabsClient.bindCustomTabsService(this, customTabsProviderPackage,
+                    mCustomTabsServiceConnection);
+        }
 
         maybeDeleteDirectlyOpenFile();
     }
@@ -414,27 +516,10 @@ public class CaptivePortalLoginActivity extends Activity {
     @VisibleForTesting
     void handleCapabilitiesChanged(@NonNull final Network network,
             @NonNull final NetworkCapabilities nc) {
-        if (!isNetworkValidationDismissEnabled()) {
-            return;
-        }
-
         if (network.equals(mNetwork) && nc.hasCapability(NET_CAPABILITY_VALIDATED)) {
             // Dismiss when login is no longer needed since network has validated, exit.
             done(Result.DISMISSED);
         }
-    }
-
-    /**
-     * Indicates whether network validation (NET_CAPABILITY_VALIDATED) should be used to determine
-     * when the portal should be dismissed, instead of having the CaptivePortalLoginActivity use
-     * its own probe.
-     */
-    private boolean isNetworkValidationDismissEnabled() {
-        return isAtLeastR();
-    }
-
-    private boolean isAtLeastR() {
-        return Build.VERSION.SDK_INT > Build.VERSION_CODES.Q;
     }
 
     // Find WebView's proxy BroadcastReceiver and prompt it to read proxy system properties.
@@ -567,6 +652,10 @@ public class CaptivePortalLoginActivity extends Activity {
             unbindService(mDownloadServiceConn);
         }
 
+        if (mCaptivePortalCustomTabsEnabled) {
+            unbindService(mCustomTabsServiceConnection);
+        }
+
         final WebView webview = (WebView) findViewById(R.id.webview);
         if (webview != null) {
             webview.stopLoading();
@@ -665,70 +754,6 @@ public class CaptivePortalLoginActivity extends Activity {
         return SystemProperties.getInt("ro.debuggable", 0) == 1;
     }
 
-    private void reevaluateNetwork() {
-        if (isNetworkValidationDismissEnabled()) {
-            // TODO : replace this with an actual call to the method when the network stack
-            // is built against a recent enough SDK.
-            if (callVoidMethodIfExists(mCaptivePortal, "reevaluateNetwork")) return;
-        }
-        testForCaptivePortal();
-    }
-
-    private boolean callVoidMethodIfExists(@NonNull final Object target,
-            @NonNull final String methodName) {
-        try {
-            final Method method = target.getClass().getDeclaredMethod(methodName);
-            method.invoke(target);
-            return true;
-        } catch (ReflectiveOperationException e) {
-            return false;
-        }
-    }
-
-    private void testForCaptivePortal() {
-        // TODO: NetworkMonitor validation is used on R+ instead; remove when dropping Q support.
-        new Thread(new Runnable() {
-            public void run() {
-                // Give time for captive portal to open.
-                try {
-                    Thread.sleep(1000);
-                } catch (InterruptedException e) {
-                }
-                HttpURLConnection urlConnection = null;
-                int httpResponseCode = 500;
-                String locationHeader = null;
-                try {
-                    urlConnection = (HttpURLConnection) mNetwork.openConnection(mUrl);
-                    urlConnection.setInstanceFollowRedirects(false);
-                    urlConnection.setConnectTimeout(SOCKET_TIMEOUT_MS);
-                    urlConnection.setReadTimeout(SOCKET_TIMEOUT_MS);
-                    urlConnection.setUseCaches(false);
-                    if (mUserAgent != null) {
-                       urlConnection.setRequestProperty("User-Agent", mUserAgent);
-                    }
-                    // cannot read request header after connection
-                    String requestHeader = urlConnection.getRequestProperties().toString();
-
-                    urlConnection.getInputStream();
-                    httpResponseCode = urlConnection.getResponseCode();
-                    locationHeader = urlConnection.getHeaderField(HTTP_LOCATION_HEADER_NAME);
-                    if (DBG) {
-                        Log.d(TAG, "probe at " + mUrl +
-                                " ret=" + httpResponseCode +
-                                " request=" + requestHeader +
-                                " headers=" + urlConnection.getHeaderFields());
-                    }
-                } catch (IOException e) {
-                } finally {
-                    if (urlConnection != null) urlConnection.disconnect();
-                }
-                if (isDismissed(httpResponseCode, locationHeader, mProbeSpec)) {
-                    done(Result.DISMISSED);
-                }
-            }
-        }).start();
-    }
-
     private static boolean isDismissed(
             int httpResponseCode, String locationHeader, CaptivePortalProbeSpec probeSpec) {
         return (probeSpec != null)
@@ -800,7 +825,7 @@ public class CaptivePortalLoginActivity extends Activity {
                 getActionBar().setSubtitle(subtitle);
             }
             getProgressBar().setVisibility(View.VISIBLE);
-            reevaluateNetwork();
+            mCaptivePortal.reevaluateNetwork();
         }
 
         @Override
@@ -822,7 +847,7 @@ public class CaptivePortalLoginActivity extends Activity {
                 view.requestFocus();
                 view.clearHistory();
             }
-            reevaluateNetwork();
+            mCaptivePortal.reevaluateNetwork();
         }
 
         // Convert Android scaled-pixels (sp) to HTML size.
@@ -896,7 +921,7 @@ public class CaptivePortalLoginActivity extends Activity {
             // Before Android R, CaptivePortalLogin cannot call the isAlwaysOnVpnLockdownEnabled()
             // to get the status of VPN always-on due to permission denied. So adding a version
             // check here to prevent CaptivePortalLogin crashes.
-            if (hasVpnNetwork() || (isAtLeastR() && isAlwaysOnVpnEnabled())) {
+            if (hasVpnNetwork() || isAlwaysOnVpnEnabled()) {
                 final String vpnWarning = getString(R.string.no_bypass_error_vpnwarning);
                 return "  <div class=vpnwarning>" + vpnWarning + "</div><br>";
             }
@@ -1264,9 +1289,6 @@ public class CaptivePortalLoginActivity extends Activity {
     }
 
     private CharSequence getVenueFriendlyName() {
-        if (!isAtLeastR()) {
-            return null;
-        }
         final LinkProperties linkProperties = mCm.getLinkProperties(mNetwork);
         if (linkProperties == null) {
             return null;
