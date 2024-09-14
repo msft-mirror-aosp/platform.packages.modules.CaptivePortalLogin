@@ -98,6 +98,7 @@ import android.widget.Toast;
 
 import androidx.browser.customtabs.CustomTabsCallback;
 import androidx.browser.customtabs.CustomTabsClient;
+import androidx.browser.customtabs.CustomTabsIntent;
 import androidx.browser.customtabs.CustomTabsServiceConnection;
 import androidx.test.core.app.ActivityScenario;
 import androidx.test.espresso.intent.Intents;
@@ -1129,8 +1130,7 @@ public class CaptivePortalLoginActivityTest {
         assertNotNull(callback);
         intended(allOf(
                 hasExtra(Intent.EXTRA_REFERRER, Uri.parse("")),
-                // TODO: replace with CustomTabsIntent.EXTRA_NETWORK.
-                hasExtra(CaptivePortalLoginActivity.EXTRA_NETWORK, mNetwork),
+                hasExtra(CustomTabsIntent.EXTRA_NETWORK, mNetwork),
                 hasData(Uri.parse(TEST_URL))));
 
         // Send navigation start event, verify if the network will be reevaluated.
