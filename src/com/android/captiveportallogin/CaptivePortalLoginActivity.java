@@ -184,6 +184,8 @@ public class CaptivePortalLoginActivity extends Activity {
                         final CustomTabsIntent customTabsIntent =
                                 new CustomTabsIntent.Builder(session)
                                         .setNetwork(mNetwork)
+                                        .setShareState(CustomTabsIntent.SHARE_STATE_OFF)
+                                        .setShowTitle(true /* showTitle */)
                                         .build();
 
                         // Remove Referrer Header from HTTP probe packet by setting an empty Uri
