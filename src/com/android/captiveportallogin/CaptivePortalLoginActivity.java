@@ -105,7 +105,6 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
-import java.net.HttpURLConnection;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.net.URLConnection;
@@ -348,6 +347,11 @@ public class CaptivePortalLoginActivity extends Activity {
         return CustomTabsClient.getPackageName(getApplicationContext(), null /* packages */);
     }
 
+    @VisibleForTesting
+    boolean isMultiNetworkingSupportedByProvider(@NonNull final String defaultPackageName) {
+        return CustomTabsClient.isSetNetworkSupported(getApplicationContext(), defaultPackageName);
+    }
+
     private void initializeWebView() {
         // Also initializes proxy system properties.
         mNetwork = mNetwork.getPrivateDnsBypassingCopy();
@@ -396,19 +400,23 @@ public class CaptivePortalLoginActivity extends Activity {
 
         final String defaultPackageName = getDefaultCustomTabsProviderPackage();
         if (defaultPackageName == null) {
-            Log.w(TAG, "Default browser doesn't support custom tabs");
+            Log.i(TAG, "Default browser doesn't support custom tabs");
+            return null;
+        }
+
+        final boolean support = isMultiNetworkingSupportedByProvider(defaultPackageName);
+        if (!support) {
+            Log.i(TAG, "Default browser doesn't support multi-network");
             return null;
         }
 
         final LinkProperties lp = mCm.getLinkProperties(mNetwork);
         if (lp == null || lp.getPrivateDnsServerName() != null) {
-            Log.w(TAG, "Do not use custom tabs if private DNS (strict mode) is enabled");
+            Log.i(TAG, "Do not use custom tabs if private DNS (strict mode) is enabled");
             return null;
         }
 
         // TODO: b/330670424
-        // - check if the default browser has supported the multi-network, otherwise, fallback to
-        //   WebView.
         // - check if privacy settings such as VPN/private DNS is bypassable, otherwise, fallback
         //   to WebView.
         return defaultPackageName;
