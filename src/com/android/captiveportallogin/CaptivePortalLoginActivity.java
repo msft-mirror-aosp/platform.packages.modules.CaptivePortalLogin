@@ -354,7 +354,6 @@ public class CaptivePortalLoginActivity extends Activity {
 
     private void initializeWebView() {
         // Also initializes proxy system properties.
-        mNetwork = mNetwork.getPrivateDnsBypassingCopy();
         mCm.bindProcessToNetwork(mNetwork);
 
         // Proxy system properties must be initialized before setContentView is called
@@ -440,6 +439,7 @@ public class CaptivePortalLoginActivity extends Activity {
         mDpm = getSystemService(DevicePolicyManager.class);
         mWifiManager = getSystemService(WifiManager.class);
         mNetwork = getIntent().getParcelableExtra(ConnectivityManager.EXTRA_NETWORK);
+        mNetwork = mNetwork.getPrivateDnsBypassingCopy();
         mVenueFriendlyName = getVenueFriendlyName();
         mUserAgent =
                 getIntent().getStringExtra(ConnectivityManager.EXTRA_CAPTIVE_PORTAL_USER_AGENT);
