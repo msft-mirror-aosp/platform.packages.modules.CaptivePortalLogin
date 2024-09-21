@@ -169,6 +169,7 @@ public class CaptivePortalLoginActivityTest {
     private static DownloadService.DownloadServiceBinder sDownloadServiceBinder;
     private static CustomTabsClient sMockCustomTabsClient;
     private static ArrayMap<String, Boolean> sFeatureFlags = new ArrayMap<>();
+    private static boolean sIsMultiNetworkingSupported;
     @Rule
     public final SetFeatureFlagsRule mSetFeatureFlagsRule =
             new SetFeatureFlagsRule((name, enabled) -> {
@@ -272,6 +273,11 @@ public class CaptivePortalLoginActivityTest {
         @Override
         String getDefaultCustomTabsProviderPackage() {
             return TEST_CUSTOM_TABS_PACKAGE_NAME;
+        }
+
+        @Override
+        boolean isMultiNetworkingSupportedByProvider(final String defaultPackageName) {
+            return sIsMultiNetworkingSupported;
         }
 
         @Override
@@ -1112,6 +1118,7 @@ public class CaptivePortalLoginActivityTest {
     @Test
     @FeatureFlag(name = CAPTIVE_PORTAL_CUSTOM_TABS, enabled = true)
     public void testCaptivePortalUsingCustomTabs() throws Exception {
+        sIsMultiNetworkingSupported = true;
         final LinkProperties linkProperties = new LinkProperties();
         doReturn(linkProperties).when(sConnectivityManager).getLinkProperties(mNetwork);
 
@@ -1142,6 +1149,7 @@ public class CaptivePortalLoginActivityTest {
     @Test
     @FeatureFlag(name = CAPTIVE_PORTAL_CUSTOM_TABS, enabled = false)
     public void testCaptivePortalUsingCustomTabs_flagOff() throws Exception {
+        sIsMultiNetworkingSupported = true;
         // Set up result stubbing for the CustomTabsIntent#launchUrl, however, the
         // feature flag is off, therefore, WebView should be used.
         Intents.init();
@@ -1157,11 +1165,31 @@ public class CaptivePortalLoginActivityTest {
     @Test
     @FeatureFlag(name = CAPTIVE_PORTAL_CUSTOM_TABS, enabled = true)
     public void testCaptivePortalUsingCustomTabs_nullLinkProperties() throws Exception {
-        final Context context = getInstrumentation().getContext();
+        sIsMultiNetworkingSupported = true;
         doReturn(null).when(sConnectivityManager).getLinkProperties(mNetwork);
 
         // Set up result stubbing for the CustomTabsIntent#launchUrl, however, due to the
         // LinkProperties is null, WebView should be used.
+        Intents.init();
+        intending(hasPackage(TEST_CUSTOM_TABS_PACKAGE_NAME))
+                .respondWith(new ActivityResult(RESULT_OK, null));
+        initActivity(TEST_URL);
+        verify(sConnectivityManager).bindProcessToNetwork(any());
+        verify(sMockCustomTabsClient, never()).newSession(any());
+        mActivityScenario.onActivity(activity ->
+                assertNotNull(activity.findViewById(R.id.webview)));
+    }
+
+    @Test
+    @FeatureFlag(name = CAPTIVE_PORTAL_CUSTOM_TABS, enabled = true)
+    public void testCaptivePortalUsingCustomTabs_setNetworkIsnotEnabled() throws Exception {
+        sIsMultiNetworkingSupported = false;
+        final LinkProperties linkProperties = new LinkProperties();
+        doReturn(linkProperties).when(sConnectivityManager).getLinkProperties(mNetwork);
+
+        // Set up result stubbing for the CustomTabsIntent#launchUrl, however, due to the
+        // default browser doesn't support multi-network feature (i.e. isSetNetworkSupport returns
+        // false), WebView should be used.
         Intents.init();
         intending(hasPackage(TEST_CUSTOM_TABS_PACKAGE_NAME))
                 .respondWith(new ActivityResult(RESULT_OK, null));
