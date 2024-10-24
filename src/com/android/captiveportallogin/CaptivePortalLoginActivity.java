@@ -105,7 +105,6 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
-import java.net.HttpURLConnection;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.net.URLConnection;
@@ -161,14 +160,11 @@ public class CaptivePortalLoginActivity extends Activity {
     // Ensures that done() happens once exactly, handling concurrent callers with atomic operations.
     private final AtomicBoolean isDone = new AtomicBoolean(false);
 
-    // TODO: b/330670424 - import "CustomTabsIntent.EXTRA_NETWORK" directly when it becomes public.
-    @VisibleForTesting
-    static final String EXTRA_NETWORK = "androidx.browser.customtabs.extra.NETWORK";
     private final CustomTabsCallback mCustomTabsCallback = new CustomTabsCallback() {
         @Override
         public void onNavigationEvent(int navigationEvent, @Nullable Bundle extras) {
             if (navigationEvent == NAVIGATION_STARTED) {
-                reevaluateNetwork();
+                mCaptivePortal.reevaluateNetwork();
             }
         }
     };
@@ -186,6 +182,9 @@ public class CaptivePortalLoginActivity extends Activity {
                         // again.
                         final CustomTabsIntent customTabsIntent =
                                 new CustomTabsIntent.Builder(session)
+                                        .setNetwork(mNetwork)
+                                        .setShareState(CustomTabsIntent.SHARE_STATE_OFF)
+                                        .setShowTitle(true /* showTitle */)
                                         .build();
 
                         // Remove Referrer Header from HTTP probe packet by setting an empty Uri
@@ -194,9 +193,6 @@ public class CaptivePortalLoginActivity extends Activity {
                         final String emptyReferrer = "";
                         customTabsIntent.intent.putExtra(Intent.EXTRA_REFERRER,
                                 Uri.parse(emptyReferrer));
-                        // TODO: b/330670424 - call CustomTabsClient.Builder API to specify the
-                        // target network instead of using intent extra.
-                        customTabsIntent.intent.putExtra(EXTRA_NETWORK, mNetwork);
                         customTabsIntent.launchUrl(CaptivePortalLoginActivity.this,
                                 Uri.parse(mUrl.toString()));
                     }
@@ -351,9 +347,13 @@ public class CaptivePortalLoginActivity extends Activity {
         return CustomTabsClient.getPackageName(getApplicationContext(), null /* packages */);
     }
 
+    @VisibleForTesting
+    boolean isMultiNetworkingSupportedByProvider(@NonNull final String defaultPackageName) {
+        return CustomTabsClient.isSetNetworkSupported(getApplicationContext(), defaultPackageName);
+    }
+
     private void initializeWebView() {
         // Also initializes proxy system properties.
-        mNetwork = mNetwork.getPrivateDnsBypassingCopy();
         mCm.bindProcessToNetwork(mNetwork);
 
         // Proxy system properties must be initialized before setContentView is called
@@ -399,19 +399,23 @@ public class CaptivePortalLoginActivity extends Activity {
 
         final String defaultPackageName = getDefaultCustomTabsProviderPackage();
         if (defaultPackageName == null) {
-            Log.w(TAG, "Default browser doesn't support custom tabs");
+            Log.i(TAG, "Default browser doesn't support custom tabs");
+            return null;
+        }
+
+        final boolean support = isMultiNetworkingSupportedByProvider(defaultPackageName);
+        if (!support) {
+            Log.i(TAG, "Default browser doesn't support multi-network");
             return null;
         }
 
         final LinkProperties lp = mCm.getLinkProperties(mNetwork);
         if (lp == null || lp.getPrivateDnsServerName() != null) {
-            Log.w(TAG, "Do not use custom tabs if private DNS (strict mode) is enabled");
+            Log.i(TAG, "Do not use custom tabs if private DNS (strict mode) is enabled");
             return null;
         }
 
         // TODO: b/330670424
-        // - check if the default browser has supported the multi-network, otherwise, fallback to
-        //   WebView.
         // - check if privacy settings such as VPN/private DNS is bypassable, otherwise, fallback
         //   to WebView.
         return defaultPackageName;
@@ -435,6 +439,7 @@ public class CaptivePortalLoginActivity extends Activity {
         mDpm = getSystemService(DevicePolicyManager.class);
         mWifiManager = getSystemService(WifiManager.class);
         mNetwork = getIntent().getParcelableExtra(ConnectivityManager.EXTRA_NETWORK);
+        mNetwork = mNetwork.getPrivateDnsBypassingCopy();
         mVenueFriendlyName = getVenueFriendlyName();
         mUserAgent =
                 getIntent().getStringExtra(ConnectivityManager.EXTRA_CAPTIVE_PORTAL_USER_AGENT);
@@ -521,27 +526,10 @@ public class CaptivePortalLoginActivity extends Activity {
     @VisibleForTesting
     void handleCapabilitiesChanged(@NonNull final Network network,
             @NonNull final NetworkCapabilities nc) {
-        if (!isNetworkValidationDismissEnabled()) {
-            return;
-        }
-
         if (network.equals(mNetwork) && nc.hasCapability(NET_CAPABILITY_VALIDATED)) {
             // Dismiss when login is no longer needed since network has validated, exit.
             done(Result.DISMISSED);
         }
-    }
-
-    /**
-     * Indicates whether network validation (NET_CAPABILITY_VALIDATED) should be used to determine
-     * when the portal should be dismissed, instead of having the CaptivePortalLoginActivity use
-     * its own probe.
-     */
-    private boolean isNetworkValidationDismissEnabled() {
-        return isAtLeastR();
-    }
-
-    private boolean isAtLeastR() {
-        return Build.VERSION.SDK_INT > Build.VERSION_CODES.Q;
     }
 
     // Find WebView's proxy BroadcastReceiver and prompt it to read proxy system properties.
@@ -776,58 +764,6 @@ public class CaptivePortalLoginActivity extends Activity {
         return SystemProperties.getInt("ro.debuggable", 0) == 1;
     }
 
-    private void reevaluateNetwork() {
-        if (isNetworkValidationDismissEnabled()) {
-            mCaptivePortal.reevaluateNetwork();
-            return;
-        }
-        testForCaptivePortal();
-    }
-
-    private void testForCaptivePortal() {
-        // TODO: NetworkMonitor validation is used on R+ instead; remove when dropping Q support.
-        new Thread(new Runnable() {
-            public void run() {
-                // Give time for captive portal to open.
-                try {
-                    Thread.sleep(1000);
-                } catch (InterruptedException e) {
-                }
-                HttpURLConnection urlConnection = null;
-                int httpResponseCode = 500;
-                String locationHeader = null;
-                try {
-                    urlConnection = (HttpURLConnection) mNetwork.openConnection(mUrl);
-                    urlConnection.setInstanceFollowRedirects(false);
-                    urlConnection.setConnectTimeout(SOCKET_TIMEOUT_MS);
-                    urlConnection.setReadTimeout(SOCKET_TIMEOUT_MS);
-                    urlConnection.setUseCaches(false);
-                    if (mUserAgent != null) {
-                       urlConnection.setRequestProperty("User-Agent", mUserAgent);
-                    }
-                    // cannot read request header after connection
-                    String requestHeader = urlConnection.getRequestProperties().toString();
-
-                    urlConnection.getInputStream();
-                    httpResponseCode = urlConnection.getResponseCode();
-                    locationHeader = urlConnection.getHeaderField(HTTP_LOCATION_HEADER_NAME);
-                    if (DBG) {
-                        Log.d(TAG, "probe at " + mUrl +
-                                " ret=" + httpResponseCode +
-                                " request=" + requestHeader +
-                                " headers=" + urlConnection.getHeaderFields());
-                    }
-                } catch (IOException e) {
-                } finally {
-                    if (urlConnection != null) urlConnection.disconnect();
-                }
-                if (isDismissed(httpResponseCode, locationHeader, mProbeSpec)) {
-                    done(Result.DISMISSED);
-                }
-            }
-        }).start();
-    }
-
     private static boolean isDismissed(
             int httpResponseCode, String locationHeader, CaptivePortalProbeSpec probeSpec) {
         return (probeSpec != null)
@@ -899,7 +835,7 @@ public class CaptivePortalLoginActivity extends Activity {
                 getActionBar().setSubtitle(subtitle);
             }
             getProgressBar().setVisibility(View.VISIBLE);
-            reevaluateNetwork();
+            mCaptivePortal.reevaluateNetwork();
         }
 
         @Override
@@ -921,7 +857,7 @@ public class CaptivePortalLoginActivity extends Activity {
                 view.requestFocus();
                 view.clearHistory();
             }
-            reevaluateNetwork();
+            mCaptivePortal.reevaluateNetwork();
         }
 
         // Convert Android scaled-pixels (sp) to HTML size.
@@ -995,7 +931,7 @@ public class CaptivePortalLoginActivity extends Activity {
             // Before Android R, CaptivePortalLogin cannot call the isAlwaysOnVpnLockdownEnabled()
             // to get the status of VPN always-on due to permission denied. So adding a version
             // check here to prevent CaptivePortalLogin crashes.
-            if (hasVpnNetwork() || (isAtLeastR() && isAlwaysOnVpnEnabled())) {
+            if (hasVpnNetwork() || isAlwaysOnVpnEnabled()) {
                 final String vpnWarning = getString(R.string.no_bypass_error_vpnwarning);
                 return "  <div class=vpnwarning>" + vpnWarning + "</div><br>";
             }
@@ -1363,9 +1299,6 @@ public class CaptivePortalLoginActivity extends Activity {
     }
 
     private CharSequence getVenueFriendlyName() {
-        if (!isAtLeastR()) {
-            return null;
-        }
         final LinkProperties linkProperties = mCm.getLinkProperties(mNetwork);
         if (linkProperties == null) {
             return null;
