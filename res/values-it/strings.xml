@@ -21,7 +21,7 @@
     <string name="ssl_error_view_certificate" msgid="3447891108083278449">"Visualizza certificato"</string>
     <string name="custom_scheme_warning" msgid="1809266150423969087">"La rete a cui stai tentando di accedere richiede di aprire un\'altra applicazione."</string>
     <string name="custom_scheme_example" msgid="7126568152528588592">"Ad esempio, la pagina di accesso potrebbe richiedere un\'applicazione specifica per l\'autenticazione"</string>
-    <string name="ok" msgid="6584612582120777209">"OK"</string>
+    <string name="ok" msgid="6584612582120777209">"Ok"</string>
     <string name="page_info_address" msgid="1290683284404217554">"Indirizzo:"</string>
     <string name="page_info" msgid="46593086046896385">"Informazioni sulla pagina"</string>
     <string name="downloading_paramfile" msgid="685182551665849043">"Download di %1$s"</string>
