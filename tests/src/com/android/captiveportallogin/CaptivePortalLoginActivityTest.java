@@ -1079,8 +1079,13 @@ public class CaptivePortalLoginActivityTest {
         final Uri mockFile = Uri.parse("content://mockdata");
         final Uri otherFile = Uri.parse("content://otherdata");
         final int downloadId = 123;
+        final int otherDownloadId = 456;
         final HttpServer server = prepareTestDirectlyOpen(linkIdDownload, "dl",
                 filename, mimeType);
+        doReturn(downloadId).when(sDownloadServiceBinder)
+                .requestDownload(any(), any(), any(), any(), any(), any(), eq(mimeType));
+        // Mock intents trying to actually install the profile
+        Intents.intending(not(isInternal())).respondWith(new ActivityResult(RESULT_OK, null));
 
         final UiObject spinner = getUiSpinner();
         // Verify no spinner first.
@@ -1094,7 +1099,8 @@ public class CaptivePortalLoginActivityTest {
         assertEquals(0, Intents.getIntents().size());
         // Trigger callback with negative result with other undesired other download file.
         mActivityScenario.onActivity(a ->
-                a.mProgressCallback.onDownloadComplete(otherFile, mimeType, downloadId, false));
+                a.mProgressCallback.onDownloadComplete(otherFile, mimeType, otherDownloadId,
+                        false));
         // Verify spinner is still visible and no intent to open the target file.
         assertTrue(spinner.exists());
         assertEquals(0, Intents.getIntents().size());
