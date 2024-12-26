@@ -34,6 +34,7 @@ import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.ServiceConnection;
+import android.content.pm.PackageManager.NameNotFoundException;
 import android.graphics.Bitmap;
 import android.net.CaptivePortal;
 import android.net.CaptivePortalData;
@@ -54,9 +55,12 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.IBinder;
 import android.os.Looper;
+import android.os.OutcomeReceiver;
+import android.os.ServiceSpecificException;
 import android.os.SystemProperties;
 import android.provider.DocumentsContract;
 import android.provider.MediaStore;
+import android.system.OsConstants;
 import android.text.TextUtils;
 import android.util.ArrayMap;
 import android.util.ArraySet;
@@ -87,6 +91,7 @@ import android.widget.Toast;
 import androidx.annotation.GuardedBy;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.RequiresApi;
 import androidx.annotation.StringRes;
 import androidx.annotation.VisibleForTesting;
 import androidx.browser.customtabs.CustomTabsCallback;
@@ -98,6 +103,7 @@ import androidx.core.content.FileProvider;
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 
 import com.android.internal.logging.nano.MetricsProto.MetricsEvent;
+import com.android.modules.utils.build.SdkLevel;
 import com.android.net.module.util.DeviceConfigUtils;
 
 import java.io.File;
@@ -113,6 +119,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Objects;
 import java.util.Random;
+import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public class CaptivePortalLoginActivity extends Activity {
@@ -348,6 +355,12 @@ public class CaptivePortalLoginActivity extends Activity {
     }
 
     @VisibleForTesting
+    int getCustomTabsProviderUid(@NonNull final String customTabsProviderPackageName)
+            throws NameNotFoundException {
+        return getPackageManager().getPackageUid(customTabsProviderPackageName, 0);
+    }
+
+    @VisibleForTesting
     boolean isMultiNetworkingSupportedByProvider(@NonNull final String defaultPackageName) {
         return CustomTabsClient.isSetNetworkSupported(getApplicationContext(), defaultPackageName);
     }
@@ -393,6 +406,34 @@ public class CaptivePortalLoginActivity extends Activity {
         });
     }
 
+    private void bindCustomTabsService(@NonNull final String customTabsProviderPackageName) {
+        CustomTabsClient.bindCustomTabsService(CaptivePortalLoginActivity.this,
+                customTabsProviderPackageName, mCustomTabsServiceConnection);
+    }
+
+    @RequiresApi(Build.VERSION_CODES.S)
+    private boolean bypassVpnForCustomTabsProvider(
+            @NonNull final String customTabsProviderPackageName,
+            @NonNull final OutcomeReceiver<Void, ServiceSpecificException> receiver) {
+        final Class captivePortalClass = mCaptivePortal.getClass();
+        try {
+            final Method setDelegateUidMethod =
+                    captivePortalClass.getMethod("setDelegateUid", int.class, Executor.class,
+                            OutcomeReceiver.class);
+            setDelegateUidMethod.invoke(mCaptivePortal,
+                    getCustomTabsProviderUid(customTabsProviderPackageName),
+                    getMainExecutor(),
+                    receiver);
+            return true;
+        } catch (ReflectiveOperationException | IllegalArgumentException e) {
+            Log.e(TAG, "Reflection exception while setting delegate uid", e);
+            return false;
+        } catch (NameNotFoundException e) {
+            Log.e(TAG, "Could not find the UID for " + customTabsProviderPackageName, e);
+            return false;
+        }
+    }
+
     @Nullable
     private String getCustomTabsProviderPackageIfEnabled() {
         if (!mCaptivePortalCustomTabsEnabled) return null;
@@ -409,15 +450,14 @@ public class CaptivePortalLoginActivity extends Activity {
             return null;
         }
 
+        // TODO: b/330670424 - check if privacy settings such as private DNS is bypassable,
+        // otherwise, fallback to WebView.
         final LinkProperties lp = mCm.getLinkProperties(mNetwork);
         if (lp == null || lp.getPrivateDnsServerName() != null) {
             Log.i(TAG, "Do not use custom tabs if private DNS (strict mode) is enabled");
             return null;
         }
 
-        // TODO: b/330670424
-        // - check if privacy settings such as VPN/private DNS is bypassable, otherwise, fallback
-        //   to WebView.
         return defaultPackageName;
     }
 
@@ -483,15 +523,38 @@ public class CaptivePortalLoginActivity extends Activity {
             return;
         }
 
-        final String customTabsProviderPackage = getCustomTabsProviderPackageIfEnabled();
-        if (customTabsProviderPackage == null) {
+        maybeDeleteDirectlyOpenFile();
+
+        final String customTabsProviderPackageName = getCustomTabsProviderPackageIfEnabled();
+        if (customTabsProviderPackageName == null || !SdkLevel.isAtLeastS()) {
             initializeWebView();
         } else {
-            CustomTabsClient.bindCustomTabsService(this, customTabsProviderPackage,
-                    mCustomTabsServiceConnection);
+            // TODO: Fall back to WebView iff VPN is enabled and the custom tabs provider is not
+            // allowed to bypass VPN, e.g. an error or exception happens when calling the
+            // {@link CaptivePortal#setDelegateUid} API. Otherwise, force launch the custom tabs
+            // even if VPN cannot be bypassed.
+            final boolean success = bypassVpnForCustomTabsProvider(
+                    customTabsProviderPackageName,
+                    new OutcomeReceiver<Void, ServiceSpecificException>() {
+                        // TODO: log the callback result metrics.
+                        @Override
+                        public void onResult(Void r) {
+                            Log.d(TAG, "Set delegate uid for " + customTabsProviderPackageName
+                                    + " to bypass VPN successfully");
+                            bindCustomTabsService(customTabsProviderPackageName);
+                        }
+                        @Override
+                        public void onError(ServiceSpecificException e) {
+                            Log.e(TAG, "Fail to set delegate uid for "
+                                    + customTabsProviderPackageName + " to bypass VPN"
+                                    + ", error: " + OsConstants.errnoName(e.errorCode), e);
+                            bindCustomTabsService(customTabsProviderPackageName);
+                        }
+                    });
+            if (!success) { // caught an exception
+                bindCustomTabsService(customTabsProviderPackageName);
+            }
         }
-
-        maybeDeleteDirectlyOpenFile();
     }
 
     private void maybeDeleteDirectlyOpenFile() {
