@@ -434,6 +434,8 @@ public class CaptivePortalLoginActivityTest {
         if (mTestNetworkTracker != null) {
             runAsShell(MANAGE_TEST_NETWORKS, mTestNetworkTracker::teardown);
         }
+        // Clean up the feature flags to not mess up the next test case.
+        sFeatureFlags.clear();
     }
 
     private void initActivity(String url) {
@@ -1174,7 +1176,7 @@ public class CaptivePortalLoginActivityTest {
         // we force launch the custom tab even if VPN cannot be bypassed in production code.
         final ArgumentCaptor<CustomTabsCallback> captor =
                 ArgumentCaptor.forClass(CustomTabsCallback.class);
-        verify(sMockCustomTabsClient).newSession(captor.capture());
+        verify(sMockCustomTabsClient, timeout(TEST_TIMEOUT_MS)).newSession(captor.capture());
         final CustomTabsCallback callback = captor.getValue();
         assertNotNull(callback);
         intended(allOf(
