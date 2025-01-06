@@ -42,6 +42,7 @@ android_library {
         "androidx.legacy_legacy-support-core-ui",
         "captiveportal-lib",
         "metrics-constants-protos",
+        "modules-utils-build",
         "net-utils-connectivity-apks",
     ],
     libs: [
