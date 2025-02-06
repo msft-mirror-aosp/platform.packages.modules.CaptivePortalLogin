@@ -192,6 +192,13 @@ public class CaptivePortalLoginActivity extends Activity {
                                         .setNetwork(mNetwork)
                                         .setShareState(CustomTabsIntent.SHARE_STATE_OFF)
                                         .setShowTitle(true /* showTitle */)
+                                        // Don't show enter animations, because there is no
+                                        // content to animate from in this activity. As such, set
+                                        // the res IDs to zero, which code for no animation.
+                                        // The exit animations should be left to their default,
+                                        // so that closing the custom tab animates as expected.
+                                        .setStartAnimations(CaptivePortalLoginActivity.this,
+                                                0, 0)
                                         .build();
 
                         // Remove Referrer Header from HTTP probe packet by setting an empty Uri
@@ -202,6 +209,9 @@ public class CaptivePortalLoginActivity extends Activity {
                                 Uri.parse(emptyReferrer));
                         customTabsIntent.launchUrl(CaptivePortalLoginActivity.this,
                                 Uri.parse(mUrl.toString()));
+                        // Control has been handed to the custom tab. The activity behind has
+                        // served its purpose and should now be finished.
+                        finish();
                     }
 
                     @Override
