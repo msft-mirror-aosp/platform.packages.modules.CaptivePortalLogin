@@ -191,7 +191,9 @@ public class CaptivePortalLoginActivity extends Activity {
                                 new CustomTabsIntent.Builder(session)
                                         .setNetwork(mNetwork)
                                         .setShareState(CustomTabsIntent.SHARE_STATE_OFF)
-                                        .setShowTitle(true /* showTitle */)
+                                        // Do not show a title to avoid pages pretend they are part
+                                        // of the Android system.
+                                        .setShowTitle(false /* showTitle */)
                                         // Don't show enter animations, because there is no
                                         // content to animate from in this activity. As such, set
                                         // the res IDs to zero, which code for no animation.
