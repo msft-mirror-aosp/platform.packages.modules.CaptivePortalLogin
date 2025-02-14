@@ -19,8 +19,6 @@ package com.android.captiveportallogin;
 import static android.net.ConnectivityManager.EXTRA_CAPTIVE_PORTAL_PROBE_SPEC;
 import static android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED;
 
-import static androidx.browser.customtabs.CustomTabsCallback.NAVIGATION_STARTED;
-
 import static com.android.captiveportallogin.CaptivePortalLoginFlags.CAPTIVE_PORTAL_CUSTOM_TABS;
 import static com.android.captiveportallogin.DownloadService.isDirectlyOpenType;
 
@@ -36,6 +34,7 @@ import android.content.Intent;
 import android.content.ServiceConnection;
 import android.content.pm.PackageManager.NameNotFoundException;
 import android.graphics.Bitmap;
+import android.graphics.Insets;
 import android.net.CaptivePortal;
 import android.net.CaptivePortalData;
 import android.net.ConnectivityManager;
@@ -72,6 +71,7 @@ import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.WindowInsets;
 import android.webkit.CookieManager;
 import android.webkit.DownloadListener;
 import android.webkit.SslErrorHandler;
@@ -166,12 +166,24 @@ public class CaptivePortalLoginActivity extends Activity {
     private boolean mCaptivePortalCustomTabsEnabled;
     // Ensures that done() happens once exactly, handling concurrent callers with atomic operations.
     private final AtomicBoolean isDone = new AtomicBoolean(false);
+    // Must only be touched on the UI thread. This must be initialized to false for thread
+    // visibility reasons (if initialized to true, the UI thread may still see false).
+    private boolean mIsResumed = false;
 
     private final CustomTabsCallback mCustomTabsCallback = new CustomTabsCallback() {
         @Override
         public void onNavigationEvent(int navigationEvent, @Nullable Bundle extras) {
             if (navigationEvent == NAVIGATION_STARTED) {
                 mCaptivePortal.reevaluateNetwork();
+            }
+            if (navigationEvent == TAB_HIDDEN) {
+                // Run on UI thread to make sure mIsResumed is correctly visible.
+                runOnUiThread(() -> {
+                    // The tab is hidden when the browser's activity is hidden : screen off,
+                    // home button, or press the close button on the tab. In the last case,
+                    // close the app. The activity behind the tab is only resumed in that case.
+                    if (mIsResumed) done(Result.DISMISSED);
+                });
             }
         }
     };
@@ -183,6 +195,8 @@ public class CaptivePortalLoginActivity extends Activity {
                             @NonNull CustomTabsClient client) {
                         Log.d(TAG, "CustomTabs service connected");
                         final CustomTabsSession session = client.newSession(mCustomTabsCallback);
+                        final int availableSpace = findViewById(
+                                R.id.custom_tab_header_remaining_space).getHeight();
                         // The application package name that will resolve to the CustomTabs intent
                         // has been set in {@Link CustomTabsIntent.Builder} constructor, unnecessary
                         // to call {@Link Intent#setPackage} to explicitly specify the package name
@@ -194,13 +208,28 @@ public class CaptivePortalLoginActivity extends Activity {
                                         // Do not show a title to avoid pages pretend they are part
                                         // of the Android system.
                                         .setShowTitle(false /* showTitle */)
-                                        // Don't show enter animations, because there is no
-                                        // content to animate from in this activity. As such, set
+                                        // Have the tab take up the available space under the
+                                        // header.
+                                        .setInitialActivityHeightPx(availableSpace,
+                                                CustomTabsIntent.ACTIVITY_HEIGHT_FIXED)
+                                        // Don't show animations, because there is no content to
+                                        // animate from or to in this activity. As such, set
                                         // the res IDs to zero, which code for no animation.
-                                        // The exit animations should be left to their default,
-                                        // so that closing the custom tab animates as expected.
                                         .setStartAnimations(CaptivePortalLoginActivity.this,
                                                 0, 0)
+                                        .setExitAnimations(CaptivePortalLoginActivity.this, 0, 0)
+                                        // External handlers will not work since they won't know
+                                        // on what network to operate.
+                                        .setSendToExternalDefaultHandlerEnabled(false)
+                                        // No rounding on the corners so as to have the UI of the
+                                        // tab blend more closely with the header contents.
+                                        .setToolbarCornerRadiusDp(0)
+                                        // Use the identity of the captive portal login app
+                                        .setShareIdentityEnabled(true)
+                                        // Don't hide the URL bar when scrolling down, to make
+                                        // sure the user is always aware they are on the page from
+                                        // a captive portal.
+                                        .setUrlBarHidingEnabled(false)
                                         .build();
 
                         // Remove Referrer Header from HTTP probe packet by setting an empty Uri
@@ -211,9 +240,6 @@ public class CaptivePortalLoginActivity extends Activity {
                                 Uri.parse(emptyReferrer));
                         customTabsIntent.launchUrl(CaptivePortalLoginActivity.this,
                                 Uri.parse(mUrl.toString()));
-                        // Control has been handed to the custom tab. The activity behind has
-                        // served its purpose and should now be finished.
-                        finish();
                     }
 
                     @Override
@@ -253,6 +279,18 @@ public class CaptivePortalLoginActivity extends Activity {
             maybeStartPendingDownloads();
         }
     };
+
+    @Override
+    protected void onPause() {
+        mIsResumed = false;
+        super.onPause();
+    }
+
+    @Override
+    protected void onResume() {
+        mIsResumed = true;
+        super.onResume();
+    }
 
     @VisibleForTesting
     final DownloadService.ProgressCallback mProgressCallback =
@@ -377,6 +415,27 @@ public class CaptivePortalLoginActivity extends Activity {
         return CustomTabsClient.isSetNetworkSupported(getApplicationContext(), defaultPackageName);
     }
 
+    private void applyWindowInsets(final int resourceId) {
+        if (!SdkLevel.isAtLeastV()) return;
+        final View view = findViewById(resourceId);
+        view.setOnApplyWindowInsetsListener((v, windowInsets) -> {
+            final Insets insets = windowInsets.getInsets(WindowInsets.Type.systemBars());
+            v.setPadding(0 /* left */, insets.top /* top */, 0 /* right */,
+                    0 /* bottom */);
+            return windowInsets.inset(0, insets.top, 0, 0);
+        });
+    }
+
+    private void initializeCustomTabHeader() {
+        setContentView(R.layout.activity_custom_tab_header);
+        // No action bar as this activity implements its own UI instead, so it can display more
+        // useful information, e.g. about VPN or private DNS handling.
+        getActionBar().hide();
+        final TextView headerTitle = findViewById(R.id.custom_tab_header_title);
+        headerTitle.setText(getHeaderTitle());
+        applyWindowInsets(R.id.custom_tab_header_top_bar);
+    }
+
     private void initializeWebView() {
         // Also initializes proxy system properties.
         mCm.bindProcessToNetwork(mNetwork);
@@ -390,6 +449,8 @@ public class CaptivePortalLoginActivity extends Activity {
         getActionBar().setElevation(0); // remove shadow
         getActionBar().setTitle(getHeaderTitle());
         getActionBar().setSubtitle("");
+
+        applyWindowInsets(R.id.container);
 
         final WebView webview = getWebview();
         webview.clearCache(true);
@@ -541,6 +602,7 @@ public class CaptivePortalLoginActivity extends Activity {
         if (customTabsProviderPackageName == null || !SdkLevel.isAtLeastS()) {
             initializeWebView();
         } else {
+            initializeCustomTabHeader();
             // TODO: Fall back to WebView iff VPN is enabled and the custom tabs provider is not
             // allowed to bypass VPN, e.g. an error or exception happens when calling the
             // {@link CaptivePortal#setDelegateUid} API. Otherwise, force launch the custom tabs
@@ -664,8 +726,9 @@ public class CaptivePortalLoginActivity extends Activity {
 
     @Override
     public void onBackPressed() {
-        WebView myWebView = findViewById(R.id.webview);
-        if (myWebView.canGoBack() && mWebViewClient.allowBack()) {
+        final WebView myWebView = findViewById(R.id.webview);
+        // The web view is null if the app is using custom tabs
+        if (null != myWebView && myWebView.canGoBack() && mWebViewClient.allowBack()) {
             myWebView.goBack();
         } else {
             super.onBackPressed();
@@ -706,6 +769,8 @@ public class CaptivePortalLoginActivity extends Activity {
     private void setProgressSpinnerVisibility(int visibility) {
         ensureRunningOnMainThread();
 
+        // getProgressLayout should never return null here, because this method is only ever called
+        // when running in webview mode.
         getProgressLayout().setVisibility(visibility);
         if (visibility != View.VISIBLE) {
             mDirectlyOpenId = NO_DIRECTLY_OPEN_TASK_ID;
@@ -909,6 +974,8 @@ public class CaptivePortalLoginActivity extends Activity {
                 String subtitle = (url != null) ? getHeaderSubtitle(url) : urlString;
                 getActionBar().setSubtitle(subtitle);
             }
+            // getProgressBar() can't return null here because this method can only be
+            // called in webview mode, not in custom tabs mode.
             getProgressBar().setVisibility(View.VISIBLE);
             mCaptivePortal.reevaluateNetwork();
         }
@@ -916,6 +983,8 @@ public class CaptivePortalLoginActivity extends Activity {
         @Override
         public void onPageFinished(WebView view, String url) {
             mPagesLoaded++;
+            // getProgressBar() can't return null here because this method can only be
+            // called in webview mode, not in custom tabs mode.
             getProgressBar().setVisibility(View.INVISIBLE);
             mSwipeRefreshLayout.setRefreshing(false);
             if (mPagesLoaded == 1) {
@@ -1162,6 +1231,8 @@ public class CaptivePortalLoginActivity extends Activity {
     private class MyWebChromeClient extends WebChromeClient {
         @Override
         public void onProgressChanged(WebView view, int newProgress) {
+            // getProgressBar() can't return null here because this method can only be
+            // called in webview mode, not in custom tabs mode.
             getProgressBar().setProgress(newProgress);
         }
     }
@@ -1279,14 +1350,17 @@ public class CaptivePortalLoginActivity extends Activity {
         return FILE_PROVIDER_AUTHORITY;
     }
 
+    @Nullable
     private ProgressBar getProgressBar() {
         return findViewById(R.id.progress_bar);
     }
 
+    @Nullable
     private WebView getWebview() {
         return findViewById(R.id.webview);
     }
 
+    @Nullable
     private FrameLayout getProgressLayout() {
         return findViewById(R.id.downloading_panel);
     }

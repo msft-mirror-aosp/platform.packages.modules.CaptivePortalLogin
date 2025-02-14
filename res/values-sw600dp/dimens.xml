@@ -1,0 +1,4 @@
+<resources>
+    <!-- As per Material Design guidelines -->
+    <dimen name="custom_tab_header_title_height">48dp</dimen>
+</resources>
