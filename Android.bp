@@ -23,7 +23,7 @@ java_defaults {
     name: "CaptivePortalLoginDefaults",
     sdk_version: "module_current",
     min_sdk_version: "30",
-    target_sdk_version: "35", // Keep in sync with CaptivePortalLoginTests
+    target_sdk_version: "36", // Keep in sync with CaptivePortalLoginTests
     lint: {
         strict_updatability_linting: true,
     },
