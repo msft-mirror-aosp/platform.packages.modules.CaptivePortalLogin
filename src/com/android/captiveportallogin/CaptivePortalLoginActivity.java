@@ -235,6 +235,11 @@ public class CaptivePortalLoginActivity extends Activity {
             // TODO : recompute available space when the app changes sizes
             final int availableSpace = mParent.findViewById(
                                 R.id.custom_tab_header_remaining_space).getHeight();
+            final int size = (int) TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP,
+                    24 /* dp */, mParent.getResources().getDisplayMetrics());
+            final Bitmap emptyIcon = Bitmap.createBitmap(size /* width */, size /* height */,
+                    Bitmap.Config.ARGB_8888);
+            emptyIcon.setPixel(0, 0, 0);
             // The application package name that will resolve to the CustomTabs intent
             // has been set in {@Link CustomTabsIntent.Builder} constructor, unnecessary
             // to call {@Link Intent#setPackage} to explicitly specify the package name
@@ -252,6 +257,9 @@ public class CaptivePortalLoginActivity extends Activity {
                     // this activity. As such, set the res IDs to zero, which code for no animation.
                     .setStartAnimations(mParent, 0, 0)
                     .setExitAnimations(mParent, 0, 0)
+                    // Temporary workaround : use an empty icon for the close button. It doesn't
+                    // prevent interaction, but it least it doesn't LOOK like you can press it.
+                    .setCloseButtonIcon(emptyIcon)
                     // External handlers will not work since they won't know on what network to
                     // operate.
                     .setSendToExternalDefaultHandlerEnabled(false)
