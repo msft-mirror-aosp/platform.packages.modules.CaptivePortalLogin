@@ -266,6 +266,11 @@ public class CaptivePortalLoginActivityTest {
         }
 
         @Override
+        Context getContextForCustomTabsBinding() {
+            return this;
+        }
+
+        @Override
         public void startActivity(Intent intent) {
             if (Intent.ACTION_VIEW.equals(intent.getAction())
                     && intent.getData() != null
