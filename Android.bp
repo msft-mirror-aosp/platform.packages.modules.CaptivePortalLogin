@@ -46,6 +46,7 @@ android_library {
         "net-utils-connectivity-apks",
     ],
     libs: [
+        "framework-configinfrastructure.stubs.module_lib",
         "framework-connectivity.stubs.module_lib",
         "framework-mediaprovider.stubs.module_lib",
         "framework-wifi.stubs.module_lib",
