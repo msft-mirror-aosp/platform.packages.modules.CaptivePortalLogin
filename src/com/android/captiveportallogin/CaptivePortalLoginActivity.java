@@ -32,7 +32,9 @@ import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.ServiceConnection;
+import android.content.pm.PackageManager;
 import android.content.pm.PackageManager.NameNotFoundException;
+import android.content.pm.ResolveInfo;
 import android.graphics.Bitmap;
 import android.graphics.Insets;
 import android.net.CaptivePortal;
@@ -57,6 +59,7 @@ import android.os.Looper;
 import android.os.OutcomeReceiver;
 import android.os.ServiceSpecificException;
 import android.os.SystemProperties;
+import android.provider.DeviceConfig;
 import android.provider.DocumentsContract;
 import android.provider.MediaStore;
 import android.system.OsConstants;
@@ -135,6 +138,7 @@ public class CaptivePortalLoginActivity extends Activity {
     private static final String FILE_PROVIDER_AUTHORITY =
             "com.android.captiveportallogin.fileprovider";
     // This should match the path name in the FileProvider paths XML.
+    private static final String USE_ANY_CUSTOM_TAB_PROVIDER = "use_any_custom_tab_provider";
     @VisibleForTesting
     static final String FILE_PROVIDER_DOWNLOAD_PATH = "downloads";
     private static final int NO_DIRECTLY_OPEN_TASK_ID = -1;
@@ -437,6 +441,37 @@ public class CaptivePortalLoginActivity extends Activity {
         }
     }
 
+    // Ideally there should be a setting to let the user decide whether they want to
+    // use custom tabs from a non-default browser for captive portals. Most users are
+    // expected not to want custom tabs from a non-default browser : there
+    // is a good chance they don't trust the company making a non-default browser that
+    // is installed by default on their phone, or even if they trust it they may just
+    // dislike it. Users tend to be passionate about their browser preference.
+    // Still there is a use case for this, like playing DRM-protected content. Absent
+    // trust and like issues, a non-default browser is still probably a more competent
+    // implementation than the webview, and while it probably doesn't have the user's
+    // credentials or personal info, it is likely better at handling SSL errors, non-
+    // default schemes, login status and the like.
+    // Until there is such a setting, the captive portal login app should default to
+    // only use the default browser, and use the webview if the default browser does
+    // not support custom tabs with multi-networking.
+    // However, temporarily to help with tests, using any browser with the available
+    // capabilities is useful. As such, only do this if the hidden device config
+    // USE_ANY_CUSTOM_TAB_PROVIDER is true.
+    @Nullable
+    String getAnyCustomTabsProviderPackage() {
+        // Get all apps that can handle VIEW intents and Custom Tab service connections.
+        final Intent activityIntent = new Intent(Intent.ACTION_VIEW, Uri.parse("http://"));
+        for (final ResolveInfo resolveInfo : getPackageManager()
+                .queryIntentActivities(activityIntent, PackageManager.MATCH_ALL)) {
+            if (null == resolveInfo || null == resolveInfo.activityInfo) continue;
+            if (isMultiNetworkingSupportedByProvider(resolveInfo.activityInfo.packageName)) {
+                return resolveInfo.activityInfo.packageName;
+            }
+        }
+        return null;
+    }
+
     @VisibleForTesting
     @Nullable
     String getDefaultCustomTabsProviderPackage() {
@@ -444,7 +479,7 @@ public class CaptivePortalLoginActivity extends Activity {
     }
 
     @VisibleForTesting
-    int getCustomTabsProviderUid(@NonNull final String customTabsProviderPackageName)
+    int getPackageUid(@NonNull final String customTabsProviderPackageName)
             throws NameNotFoundException {
         return getPackageManager().getPackageUid(customTabsProviderPackageName, 0);
     }
@@ -538,7 +573,7 @@ public class CaptivePortalLoginActivity extends Activity {
                     captivePortalClass.getMethod("setDelegateUid", int.class, Executor.class,
                             OutcomeReceiver.class);
             setDelegateUidMethod.invoke(mCaptivePortal,
-                    getCustomTabsProviderUid(customTabsProviderPackageName),
+                    getPackageUid(customTabsProviderPackageName),
                     getMainExecutor(),
                     receiver);
             return true;
@@ -555,18 +590,6 @@ public class CaptivePortalLoginActivity extends Activity {
     private String getCustomTabsProviderPackageIfEnabled() {
         if (!mCaptivePortalCustomTabsEnabled) return null;
 
-        final String defaultPackageName = getDefaultCustomTabsProviderPackage();
-        if (defaultPackageName == null) {
-            Log.i(TAG, "Default browser doesn't support custom tabs");
-            return null;
-        }
-
-        final boolean support = isMultiNetworkingSupportedByProvider(defaultPackageName);
-        if (!support) {
-            Log.i(TAG, "Default browser doesn't support multi-network");
-            return null;
-        }
-
         // TODO: b/330670424 - check if privacy settings such as private DNS is bypassable,
         // otherwise, fallback to WebView.
         final LinkProperties lp = mCm.getLinkProperties(mNetwork);
@@ -575,7 +598,22 @@ public class CaptivePortalLoginActivity extends Activity {
             return null;
         }
 
-        return defaultPackageName;
+        final String defaultPackage = getDefaultCustomTabsProviderPackage();
+        if (null != defaultPackage && isMultiNetworkingSupportedByProvider(defaultPackage)) {
+            return defaultPackage;
+        }
+
+        Log.i(TAG, "Default browser doesn't support custom tabs");
+
+        // Intentionally no UX way to set this. adb command is the only way
+        // adb shell device_config put captive_portal_login use_any_custom_tab_provider true
+        final boolean useAnyCustomTabProvider = DeviceConfigUtils.getDeviceConfigPropertyBoolean(
+                DeviceConfig.NAMESPACE_CAPTIVEPORTALLOGIN,
+                USE_ANY_CUSTOM_TAB_PROVIDER,
+                false
+        );
+        if (!useAnyCustomTabProvider) return null;
+        return getAnyCustomTabsProviderPackage();
     }
 
     @Override
