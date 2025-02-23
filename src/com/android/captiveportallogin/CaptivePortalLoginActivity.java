@@ -19,8 +19,6 @@ package com.android.captiveportallogin;
 import static android.net.ConnectivityManager.EXTRA_CAPTIVE_PORTAL_PROBE_SPEC;
 import static android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED;
 
-import static androidx.browser.customtabs.CustomTabsCallback.NAVIGATION_STARTED;
-
 import static com.android.captiveportallogin.CaptivePortalLoginFlags.CAPTIVE_PORTAL_CUSTOM_TABS;
 import static com.android.captiveportallogin.DownloadService.isDirectlyOpenType;
 
@@ -34,8 +32,11 @@ import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.ServiceConnection;
+import android.content.pm.PackageManager;
 import android.content.pm.PackageManager.NameNotFoundException;
+import android.content.pm.ResolveInfo;
 import android.graphics.Bitmap;
+import android.graphics.Insets;
 import android.net.CaptivePortal;
 import android.net.CaptivePortalData;
 import android.net.ConnectivityManager;
@@ -58,6 +59,7 @@ import android.os.Looper;
 import android.os.OutcomeReceiver;
 import android.os.ServiceSpecificException;
 import android.os.SystemProperties;
+import android.provider.DeviceConfig;
 import android.provider.DocumentsContract;
 import android.provider.MediaStore;
 import android.system.OsConstants;
@@ -72,6 +74,7 @@ import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.WindowInsets;
 import android.webkit.CookieManager;
 import android.webkit.DownloadListener;
 import android.webkit.SslErrorHandler;
@@ -135,6 +138,7 @@ public class CaptivePortalLoginActivity extends Activity {
     private static final String FILE_PROVIDER_AUTHORITY =
             "com.android.captiveportallogin.fileprovider";
     // This should match the path name in the FileProvider paths XML.
+    private static final String USE_ANY_CUSTOM_TAB_PROVIDER = "use_any_custom_tab_provider";
     @VisibleForTesting
     static final String FILE_PROVIDER_DOWNLOAD_PATH = "downloads";
     private static final int NO_DIRECTLY_OPEN_TASK_ID = -1;
@@ -166,61 +170,126 @@ public class CaptivePortalLoginActivity extends Activity {
     private boolean mCaptivePortalCustomTabsEnabled;
     // Ensures that done() happens once exactly, handling concurrent callers with atomic operations.
     private final AtomicBoolean isDone = new AtomicBoolean(false);
+    // Must only be touched on the UI thread. This must be initialized to false for thread
+    // visibility reasons (if initialized to true, the UI thread may still see false).
+    private boolean mIsResumed = false;
 
-    private final CustomTabsCallback mCustomTabsCallback = new CustomTabsCallback() {
+    // Persistence across configuration changes, e.g. when the device is rotated, the
+    // window is resized in multi-window mode, or a hardware keyboard is attached.
+    // When this happens the app needs to know not to create a new custom tab, or it will
+    // have multiple tabs open on top of each other.
+    // This must only be touched on the main thread of the app.
+    private static final class PersistentState {
+        CaptivePortalCustomTabsServiceConnection mServiceConnection = null;
+        CaptivePortalCustomTabsCallback mCallback = null;
+        public void copyFrom(@NonNull PersistentState other) {
+            mServiceConnection = other.mServiceConnection;
+            mCallback = other.mCallback;
+        }
+    }
+    // Must only be touched on the UI thread
+    private final PersistentState mPersistentState = new PersistentState();
+
+    private static final class CaptivePortalCustomTabsCallback extends CustomTabsCallback {
+        @NonNull private CaptivePortalLoginActivity mParent;
+
+        CaptivePortalCustomTabsCallback(@NonNull final CaptivePortalLoginActivity parent) {
+            mParent = parent;
+        }
+
+        public void reparent(@NonNull final CaptivePortalLoginActivity newParent) {
+            mParent = newParent;
+        }
+
         @Override
         public void onNavigationEvent(int navigationEvent, @Nullable Bundle extras) {
             if (navigationEvent == NAVIGATION_STARTED) {
-                mCaptivePortal.reevaluateNetwork();
+                mParent.mCaptivePortal.reevaluateNetwork();
+            }
+            if (navigationEvent == TAB_HIDDEN) {
+                // Run on UI thread to make sure mIsResumed is correctly visible.
+                mParent.runOnUiThread(() -> {
+                    // The tab is hidden when the browser's activity is hidden : screen off,
+                    // home button, or press the close button on the tab. In the last case,
+                    // close the app. The activity behind the tab is only resumed in that case.
+                    if (mParent.mIsResumed) mParent.done(Result.DISMISSED);
+                });
             }
         }
-    };
+    }
 
-    private final CustomTabsServiceConnection mCustomTabsServiceConnection =
-            new CustomTabsServiceConnection() {
-                    @Override
-                    public void onCustomTabsServiceConnected(@NonNull ComponentName name,
-                            @NonNull CustomTabsClient client) {
-                        Log.d(TAG, "CustomTabs service connected");
-                        final CustomTabsSession session = client.newSession(mCustomTabsCallback);
-                        // The application package name that will resolve to the CustomTabs intent
-                        // has been set in {@Link CustomTabsIntent.Builder} constructor, unnecessary
-                        // to call {@Link Intent#setPackage} to explicitly specify the package name
-                        // again.
-                        final CustomTabsIntent customTabsIntent =
-                                new CustomTabsIntent.Builder(session)
-                                        .setNetwork(mNetwork)
-                                        .setShareState(CustomTabsIntent.SHARE_STATE_OFF)
-                                        // Do not show a title to avoid pages pretend they are part
-                                        // of the Android system.
-                                        .setShowTitle(false /* showTitle */)
-                                        // Don't show enter animations, because there is no
-                                        // content to animate from in this activity. As such, set
-                                        // the res IDs to zero, which code for no animation.
-                                        // The exit animations should be left to their default,
-                                        // so that closing the custom tab animates as expected.
-                                        .setStartAnimations(CaptivePortalLoginActivity.this,
-                                                0, 0)
-                                        .build();
+    private static final class CaptivePortalCustomTabsServiceConnection extends
+            CustomTabsServiceConnection {
+        @NonNull private CaptivePortalLoginActivity mParent;
 
-                        // Remove Referrer Header from HTTP probe packet by setting an empty Uri
-                        // instance in EXTRA_REFERRER, make sure users using custom tabs have the
-                        // same experience as the custom tabs browser.
-                        final String emptyReferrer = "";
-                        customTabsIntent.intent.putExtra(Intent.EXTRA_REFERRER,
-                                Uri.parse(emptyReferrer));
-                        customTabsIntent.launchUrl(CaptivePortalLoginActivity.this,
-                                Uri.parse(mUrl.toString()));
-                        // Control has been handed to the custom tab. The activity behind has
-                        // served its purpose and should now be finished.
-                        finish();
-                    }
+        CaptivePortalCustomTabsServiceConnection(
+                @NonNull final CaptivePortalLoginActivity parent) {
+            mParent = parent;
+        }
 
-                    @Override
-                    public void onServiceDisconnected(ComponentName componentName) {
-                        Log.d(TAG, "CustomTabs service disconnected");
-                    }
-            };
+        public void reparent(@NonNull final CaptivePortalLoginActivity newParent) {
+            mParent = newParent;
+        }
+
+        @Override
+        public void onCustomTabsServiceConnected(@NonNull ComponentName name,
+                @NonNull CustomTabsClient client) {
+            Log.d(TAG, "CustomTabs service connected");
+            final CustomTabsSession session = client.newSession(mParent.mPersistentState.mCallback);
+            // TODO : recompute available space when the app changes sizes
+            final int availableSpace = mParent.findViewById(
+                                R.id.custom_tab_header_remaining_space).getHeight();
+            final int size = (int) TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP,
+                    24 /* dp */, mParent.getResources().getDisplayMetrics());
+            final Bitmap emptyIcon = Bitmap.createBitmap(size /* width */, size /* height */,
+                    Bitmap.Config.ARGB_8888);
+            emptyIcon.setPixel(0, 0, 0);
+            // The application package name that will resolve to the CustomTabs intent
+            // has been set in {@Link CustomTabsIntent.Builder} constructor, unnecessary
+            // to call {@Link Intent#setPackage} to explicitly specify the package name
+            // again.
+            final CustomTabsIntent customTabsIntent = new CustomTabsIntent.Builder(session)
+                    .setNetwork(mParent.mNetwork)
+                    .setShareState(CustomTabsIntent.SHARE_STATE_OFF)
+                    // Do not show a title to avoid pages pretend they are part of the Android
+                    // system.
+                    .setShowTitle(false /* showTitle */)
+                    // Have the tab take up the available space under the header.
+                    .setInitialActivityHeightPx(availableSpace,
+                            CustomTabsIntent.ACTIVITY_HEIGHT_FIXED)
+                    // Don't show animations, because there is no content to animate from or to in
+                    // this activity. As such, set the res IDs to zero, which code for no animation.
+                    .setStartAnimations(mParent, 0, 0)
+                    .setExitAnimations(mParent, 0, 0)
+                    // Temporary workaround : use an empty icon for the close button. It doesn't
+                    // prevent interaction, but it least it doesn't LOOK like you can press it.
+                    .setCloseButtonIcon(emptyIcon)
+                    // External handlers will not work since they won't know on what network to
+                    // operate.
+                    .setSendToExternalDefaultHandlerEnabled(false)
+                    // No rounding on the corners so as to have the UI of the tab blend more
+                    // closely with the header contents.
+                    .setToolbarCornerRadiusDp(0)
+                    // Use the identity of the captive portal login app
+                    .setShareIdentityEnabled(true)
+                    // Don't hide the URL bar when scrolling down, to make sure the user is always
+                    // aware they are on the page from a captive portal.
+                    .setUrlBarHidingEnabled(false)
+                    .build();
+
+            // Remove Referrer Header from HTTP probe packet by setting an empty Uri
+            // instance in EXTRA_REFERRER, make sure users using custom tabs have the
+            // same experience as the custom tabs browser.
+            final String emptyReferrer = "";
+            customTabsIntent.intent.putExtra(Intent.EXTRA_REFERRER, Uri.parse(emptyReferrer));
+            customTabsIntent.launchUrl(mParent, Uri.parse(mParent.mUrl.toString()));
+        }
+
+        @Override
+        public void onServiceDisconnected(ComponentName componentName) {
+            Log.d(TAG, "CustomTabs service disconnected");
+        }
+    }
 
     // When starting downloads a file is created via startActivityForResult(ACTION_CREATE_DOCUMENT).
     // This array keeps the download request until the activity result is received. It is keyed by
@@ -253,6 +322,18 @@ public class CaptivePortalLoginActivity extends Activity {
             maybeStartPendingDownloads();
         }
     };
+
+    @Override
+    protected void onPause() {
+        mIsResumed = false;
+        super.onPause();
+    }
+
+    @Override
+    protected void onResume() {
+        mIsResumed = true;
+        super.onResume();
+    }
 
     @VisibleForTesting
     final DownloadService.ProgressCallback mProgressCallback =
@@ -360,6 +441,37 @@ public class CaptivePortalLoginActivity extends Activity {
         }
     }
 
+    // Ideally there should be a setting to let the user decide whether they want to
+    // use custom tabs from a non-default browser for captive portals. Most users are
+    // expected not to want custom tabs from a non-default browser : there
+    // is a good chance they don't trust the company making a non-default browser that
+    // is installed by default on their phone, or even if they trust it they may just
+    // dislike it. Users tend to be passionate about their browser preference.
+    // Still there is a use case for this, like playing DRM-protected content. Absent
+    // trust and like issues, a non-default browser is still probably a more competent
+    // implementation than the webview, and while it probably doesn't have the user's
+    // credentials or personal info, it is likely better at handling SSL errors, non-
+    // default schemes, login status and the like.
+    // Until there is such a setting, the captive portal login app should default to
+    // only use the default browser, and use the webview if the default browser does
+    // not support custom tabs with multi-networking.
+    // However, temporarily to help with tests, using any browser with the available
+    // capabilities is useful. As such, only do this if the hidden device config
+    // USE_ANY_CUSTOM_TAB_PROVIDER is true.
+    @Nullable
+    String getAnyCustomTabsProviderPackage() {
+        // Get all apps that can handle VIEW intents and Custom Tab service connections.
+        final Intent activityIntent = new Intent(Intent.ACTION_VIEW, Uri.parse("http://"));
+        for (final ResolveInfo resolveInfo : getPackageManager()
+                .queryIntentActivities(activityIntent, PackageManager.MATCH_ALL)) {
+            if (null == resolveInfo || null == resolveInfo.activityInfo) continue;
+            if (isMultiNetworkingSupportedByProvider(resolveInfo.activityInfo.packageName)) {
+                return resolveInfo.activityInfo.packageName;
+            }
+        }
+        return null;
+    }
+
     @VisibleForTesting
     @Nullable
     String getDefaultCustomTabsProviderPackage() {
@@ -367,7 +479,7 @@ public class CaptivePortalLoginActivity extends Activity {
     }
 
     @VisibleForTesting
-    int getCustomTabsProviderUid(@NonNull final String customTabsProviderPackageName)
+    int getPackageUid(@NonNull final String customTabsProviderPackageName)
             throws NameNotFoundException {
         return getPackageManager().getPackageUid(customTabsProviderPackageName, 0);
     }
@@ -375,6 +487,32 @@ public class CaptivePortalLoginActivity extends Activity {
     @VisibleForTesting
     boolean isMultiNetworkingSupportedByProvider(@NonNull final String defaultPackageName) {
         return CustomTabsClient.isSetNetworkSupported(getApplicationContext(), defaultPackageName);
+    }
+
+    @VisibleForTesting
+    Context getContextForCustomTabsBinding() {
+        return getApplicationContext();
+    }
+
+    private void applyWindowInsets(final int resourceId) {
+        if (!SdkLevel.isAtLeastV()) return;
+        final View view = findViewById(resourceId);
+        view.setOnApplyWindowInsetsListener((v, windowInsets) -> {
+            final Insets insets = windowInsets.getInsets(WindowInsets.Type.systemBars());
+            v.setPadding(0 /* left */, insets.top /* top */, 0 /* right */,
+                    0 /* bottom */);
+            return windowInsets.inset(0, insets.top, 0, 0);
+        });
+    }
+
+    private void initializeCustomTabHeader() {
+        setContentView(R.layout.activity_custom_tab_header);
+        // No action bar as this activity implements its own UI instead, so it can display more
+        // useful information, e.g. about VPN or private DNS handling.
+        getActionBar().hide();
+        final TextView headerTitle = findViewById(R.id.custom_tab_header_title);
+        headerTitle.setText(getHeaderTitle());
+        applyWindowInsets(R.id.custom_tab_header_top_bar);
     }
 
     private void initializeWebView() {
@@ -390,6 +528,8 @@ public class CaptivePortalLoginActivity extends Activity {
         getActionBar().setElevation(0); // remove shadow
         getActionBar().setTitle(getHeaderTitle());
         getActionBar().setSubtitle("");
+
+        applyWindowInsets(R.id.container);
 
         final WebView webview = getWebview();
         webview.clearCache(true);
@@ -419,8 +559,8 @@ public class CaptivePortalLoginActivity extends Activity {
     }
 
     private void bindCustomTabsService(@NonNull final String customTabsProviderPackageName) {
-        CustomTabsClient.bindCustomTabsService(CaptivePortalLoginActivity.this,
-                customTabsProviderPackageName, mCustomTabsServiceConnection);
+        CustomTabsClient.bindCustomTabsService(getContextForCustomTabsBinding(),
+                customTabsProviderPackageName, mPersistentState.mServiceConnection);
     }
 
     @RequiresApi(Build.VERSION_CODES.S)
@@ -433,7 +573,7 @@ public class CaptivePortalLoginActivity extends Activity {
                     captivePortalClass.getMethod("setDelegateUid", int.class, Executor.class,
                             OutcomeReceiver.class);
             setDelegateUidMethod.invoke(mCaptivePortal,
-                    getCustomTabsProviderUid(customTabsProviderPackageName),
+                    getPackageUid(customTabsProviderPackageName),
                     getMainExecutor(),
                     receiver);
             return true;
@@ -450,18 +590,6 @@ public class CaptivePortalLoginActivity extends Activity {
     private String getCustomTabsProviderPackageIfEnabled() {
         if (!mCaptivePortalCustomTabsEnabled) return null;
 
-        final String defaultPackageName = getDefaultCustomTabsProviderPackage();
-        if (defaultPackageName == null) {
-            Log.i(TAG, "Default browser doesn't support custom tabs");
-            return null;
-        }
-
-        final boolean support = isMultiNetworkingSupportedByProvider(defaultPackageName);
-        if (!support) {
-            Log.i(TAG, "Default browser doesn't support multi-network");
-            return null;
-        }
-
         // TODO: b/330670424 - check if privacy settings such as private DNS is bypassable,
         // otherwise, fallback to WebView.
         final LinkProperties lp = mCm.getLinkProperties(mNetwork);
@@ -470,16 +598,40 @@ public class CaptivePortalLoginActivity extends Activity {
             return null;
         }
 
-        return defaultPackageName;
+        final String defaultPackage = getDefaultCustomTabsProviderPackage();
+        if (null != defaultPackage && isMultiNetworkingSupportedByProvider(defaultPackage)) {
+            return defaultPackage;
+        }
+
+        Log.i(TAG, "Default browser doesn't support custom tabs");
+
+        // Intentionally no UX way to set this. adb command is the only way
+        // adb shell device_config put captive_portal_login use_any_custom_tab_provider true
+        final boolean useAnyCustomTabProvider = DeviceConfigUtils.getDeviceConfigPropertyBoolean(
+                DeviceConfig.NAMESPACE_CAPTIVEPORTALLOGIN,
+                USE_ANY_CUSTOM_TAB_PROVIDER,
+                false
+        );
+        if (!useAnyCustomTabProvider) return null;
+        return getAnyCustomTabsProviderPackage();
     }
 
     @Override
-    protected void onCreate(Bundle savedInstanceState) {
+    public Object onRetainNonConfigurationInstance() {
+        return mPersistentState;
+    }
+
+    @Override
+    protected void onCreate(@Nullable Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         // Initialize the feature flag after CaptivePortalLoginActivity is created, otherwise, the
         // context is still null and throw NPE when fetching the package manager from context.
         mCaptivePortalCustomTabsEnabled = isFeatureEnabled(CAPTIVE_PORTAL_CUSTOM_TABS);
         mCaptivePortal = getIntent().getParcelableExtra(ConnectivityManager.EXTRA_CAPTIVE_PORTAL);
+        final PersistentState lastState = (PersistentState) getLastNonConfigurationInstance();
+        if (null != lastState) {
+            mPersistentState.copyFrom(lastState);
+        }
         // Null CaptivePortal is unexpected. The following flow will need to access mCaptivePortal
         // to communicate with system. Thus, finish the activity.
         if (mCaptivePortal == null) {
@@ -541,30 +693,45 @@ public class CaptivePortalLoginActivity extends Activity {
         if (customTabsProviderPackageName == null || !SdkLevel.isAtLeastS()) {
             initializeWebView();
         } else {
-            // TODO: Fall back to WebView iff VPN is enabled and the custom tabs provider is not
-            // allowed to bypass VPN, e.g. an error or exception happens when calling the
-            // {@link CaptivePortal#setDelegateUid} API. Otherwise, force launch the custom tabs
-            // even if VPN cannot be bypassed.
-            final boolean success = bypassVpnForCustomTabsProvider(
-                    customTabsProviderPackageName,
-                    new OutcomeReceiver<Void, ServiceSpecificException>() {
-                        // TODO: log the callback result metrics.
-                        @Override
-                        public void onResult(Void r) {
-                            Log.d(TAG, "Set delegate uid for " + customTabsProviderPackageName
-                                    + " to bypass VPN successfully");
-                            bindCustomTabsService(customTabsProviderPackageName);
-                        }
-                        @Override
-                        public void onError(ServiceSpecificException e) {
-                            Log.e(TAG, "Fail to set delegate uid for "
-                                    + customTabsProviderPackageName + " to bypass VPN"
-                                    + ", error: " + OsConstants.errnoName(e.errorCode), e);
-                            bindCustomTabsService(customTabsProviderPackageName);
-                        }
-                    });
-            if (!success) { // caught an exception
-                bindCustomTabsService(customTabsProviderPackageName);
+            initializeCustomTabHeader();
+            if (mPersistentState.mCallback != null) {
+                mPersistentState.mCallback.reparent(this);
+            } else {
+                mPersistentState.mCallback = new CaptivePortalCustomTabsCallback(this);
+            }
+
+            if (mPersistentState.mServiceConnection != null) {
+                mPersistentState.mServiceConnection.reparent(this);
+            } else {
+                mPersistentState.mServiceConnection =
+                        new CaptivePortalCustomTabsServiceConnection(this);
+                // TODO: Fall back to WebView iff VPN is enabled and the custom tabs provider is not
+                // allowed to bypass VPN, e.g. an error or exception happens when calling the
+                // {@link CaptivePortal#setDelegateUid} API. Otherwise, force launch the custom tabs
+                // even if VPN cannot be bypassed.
+                final boolean success = bypassVpnForCustomTabsProvider(
+                        customTabsProviderPackageName,
+                        new OutcomeReceiver<Void, ServiceSpecificException>() {
+                            // TODO: log the callback result metrics.
+                            @Override
+                            public void onResult(Void r) {
+                                Log.d(TAG, "Set delegate uid for "
+                                        + customTabsProviderPackageName
+                                        + " to bypass VPN successfully");
+                                bindCustomTabsService(customTabsProviderPackageName);
+                            }
+
+                            @Override
+                            public void onError(ServiceSpecificException e) {
+                                Log.e(TAG, "Fail to set delegate uid for "
+                                        + customTabsProviderPackageName + " to bypass VPN"
+                                        + ", error: " + OsConstants.errnoName(e.errorCode), e);
+                                bindCustomTabsService(customTabsProviderPackageName);
+                            }
+                        });
+                if (!success) { // caught an exception
+                    bindCustomTabsService(customTabsProviderPackageName);
+                }
             }
         }
     }
@@ -664,8 +831,9 @@ public class CaptivePortalLoginActivity extends Activity {
 
     @Override
     public void onBackPressed() {
-        WebView myWebView = findViewById(R.id.webview);
-        if (myWebView.canGoBack() && mWebViewClient.allowBack()) {
+        final WebView myWebView = findViewById(R.id.webview);
+        // The web view is null if the app is using custom tabs
+        if (null != myWebView && myWebView.canGoBack() && mWebViewClient.allowBack()) {
             myWebView.goBack();
         } else {
             super.onBackPressed();
@@ -706,6 +874,8 @@ public class CaptivePortalLoginActivity extends Activity {
     private void setProgressSpinnerVisibility(int visibility) {
         ensureRunningOnMainThread();
 
+        // getProgressLayout should never return null here, because this method is only ever called
+        // when running in webview mode.
         getProgressLayout().setVisibility(visibility);
         if (visibility != View.VISIBLE) {
             mDirectlyOpenId = NO_DIRECTLY_OPEN_TASK_ID;
@@ -737,8 +907,12 @@ public class CaptivePortalLoginActivity extends Activity {
             unbindService(mDownloadServiceConn);
         }
 
-        if (mCaptivePortalCustomTabsEnabled) {
-            unbindService(mCustomTabsServiceConnection);
+        // When changing configurations, the activity will be restarted immediately by the
+        // system. It will retain persistent state with onRetainNonConfigurationInstance,
+        // and therefore the connection must not be severed just yet.
+        if (null != mPersistentState.mServiceConnection && !isChangingConfigurations()) {
+            getContextForCustomTabsBinding().unbindService(mPersistentState.mServiceConnection);
+            mPersistentState.mServiceConnection = null;
         }
 
         final WebView webview = (WebView) findViewById(R.id.webview);
@@ -909,6 +1083,8 @@ public class CaptivePortalLoginActivity extends Activity {
                 String subtitle = (url != null) ? getHeaderSubtitle(url) : urlString;
                 getActionBar().setSubtitle(subtitle);
             }
+            // getProgressBar() can't return null here because this method can only be
+            // called in webview mode, not in custom tabs mode.
             getProgressBar().setVisibility(View.VISIBLE);
             mCaptivePortal.reevaluateNetwork();
         }
@@ -916,6 +1092,8 @@ public class CaptivePortalLoginActivity extends Activity {
         @Override
         public void onPageFinished(WebView view, String url) {
             mPagesLoaded++;
+            // getProgressBar() can't return null here because this method can only be
+            // called in webview mode, not in custom tabs mode.
             getProgressBar().setVisibility(View.INVISIBLE);
             mSwipeRefreshLayout.setRefreshing(false);
             if (mPagesLoaded == 1) {
@@ -1162,6 +1340,8 @@ public class CaptivePortalLoginActivity extends Activity {
     private class MyWebChromeClient extends WebChromeClient {
         @Override
         public void onProgressChanged(WebView view, int newProgress) {
+            // getProgressBar() can't return null here because this method can only be
+            // called in webview mode, not in custom tabs mode.
             getProgressBar().setProgress(newProgress);
         }
     }
@@ -1279,14 +1459,17 @@ public class CaptivePortalLoginActivity extends Activity {
         return FILE_PROVIDER_AUTHORITY;
     }
 
+    @Nullable
     private ProgressBar getProgressBar() {
         return findViewById(R.id.progress_bar);
     }
 
+    @Nullable
     private WebView getWebview() {
         return findViewById(R.id.webview);
     }
 
+    @Nullable
     private FrameLayout getProgressLayout() {
         return findViewById(R.id.downloading_panel);
     }
