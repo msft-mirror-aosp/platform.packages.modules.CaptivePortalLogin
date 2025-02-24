@@ -20,6 +20,7 @@ import static android.net.ConnectivityManager.EXTRA_CAPTIVE_PORTAL_PROBE_SPEC;
 import static android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED;
 
 import static com.android.captiveportallogin.CaptivePortalLoginFlags.CAPTIVE_PORTAL_CUSTOM_TABS;
+import static com.android.captiveportallogin.CaptivePortalLoginFlags.USE_ANY_CUSTOM_TAB_PROVIDER;
 import static com.android.captiveportallogin.DownloadService.isDirectlyOpenType;
 
 import android.app.Activity;
@@ -138,7 +139,6 @@ public class CaptivePortalLoginActivity extends Activity {
     private static final String FILE_PROVIDER_AUTHORITY =
             "com.android.captiveportallogin.fileprovider";
     // This should match the path name in the FileProvider paths XML.
-    private static final String USE_ANY_CUSTOM_TAB_PROVIDER = "use_any_custom_tab_provider";
     @VisibleForTesting
     static final String FILE_PROVIDER_DOWNLOAD_PATH = "downloads";
     private static final int NO_DIRECTLY_OPEN_TASK_ID = -1;
@@ -385,6 +385,12 @@ public class CaptivePortalLoginActivity extends Activity {
         return DeviceConfigUtils.isCaptivePortalLoginFeatureEnabled(getApplicationContext(), name);
     }
 
+    @VisibleForTesting
+    boolean getDeviceConfigPropertyBoolean(final String name, boolean defaultValue) {
+        return DeviceConfigUtils.getDeviceConfigPropertyBoolean(
+                DeviceConfig.NAMESPACE_CAPTIVEPORTALLOGIN, name, defaultValue);
+    }
+
     private void maybeStartPendingDownloads() {
         ensureRunningOnMainThread();
 
@@ -607,11 +613,9 @@ public class CaptivePortalLoginActivity extends Activity {
 
         // Intentionally no UX way to set this. adb command is the only way
         // adb shell device_config put captive_portal_login use_any_custom_tab_provider true
-        final boolean useAnyCustomTabProvider = DeviceConfigUtils.getDeviceConfigPropertyBoolean(
-                DeviceConfig.NAMESPACE_CAPTIVEPORTALLOGIN,
-                USE_ANY_CUSTOM_TAB_PROVIDER,
-                false
-        );
+        final boolean useAnyCustomTabProvider =
+                getDeviceConfigPropertyBoolean(USE_ANY_CUSTOM_TAB_PROVIDER,
+                        false /* defaultValue */);
         if (!useAnyCustomTabProvider) return null;
         return getAnyCustomTabsProviderPackage();
     }
