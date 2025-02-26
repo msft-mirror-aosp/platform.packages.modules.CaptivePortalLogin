@@ -30,10 +30,12 @@
         <option name="package" value="com.android.captiveportallogin.tests" />
         <option name="runner" value="androidx.test.runner.AndroidJUnitRunner" />
         <option name="device-listeners" value="android.device.collectors.ScreenshotOnFailureCollector" />
+        <option name="device-listeners" value="com.android.testutils.ConnectivityDiagnosticsCollector" />
     </test>
 
     <metrics_collector class="com.android.tradefed.device.metric.FilePullerLogCollector">
         <option name="pull-pattern-keys" value="android.device.collectors.ScreenshotOnFailureCollector.*\.png"/>
+        <option name="pull-pattern-keys" value="com.android.testutils.ConnectivityDiagnosticsCollector.*"/>
         <option name="directory-keys" value="/data/user/0/com.android.captiveportallogin.tests/files" />
         <option name="collect-on-run-ended-only" value="false" />
     </metrics_collector>
