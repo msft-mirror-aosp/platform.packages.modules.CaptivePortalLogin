@@ -25,4 +25,11 @@ public class CaptivePortalLoginFlags {
      * captive portal when connecting to a network that presents a captive portal.
      */
     public static final String CAPTIVE_PORTAL_CUSTOM_TABS = "captive_portal_custom_tabs";
+
+    /**
+     * Experiment flag to use any browser in the system to launch custom tabs temporarily if
+     * the default browser doesn't support custom tabs and multi-networking, which is useful
+     * for testing.
+     */
+    public static final String USE_ANY_CUSTOM_TAB_PROVIDER = "use_any_custom_tab_provider";
 }
