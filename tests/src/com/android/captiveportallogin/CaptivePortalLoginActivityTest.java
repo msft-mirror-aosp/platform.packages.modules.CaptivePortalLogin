@@ -308,6 +308,11 @@ public class CaptivePortalLoginActivityTest {
             if (sFeatureFlags.get(name) == null) return false;
             return sFeatureFlags.get(name);
         }
+
+        @Override
+        boolean getDeviceConfigPropertyBoolean(final String name, boolean defaultValue) {
+            return defaultValue;
+        }
     }
 
     /** Class to replace CaptivePortal to prevent mock object is updated and replaced by parcel. */

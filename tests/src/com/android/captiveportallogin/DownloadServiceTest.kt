@@ -27,10 +27,8 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.IBinder
 import android.os.Parcel
-import android.os.ParcelFileDescriptor.AutoCloseInputStream
 import android.os.Parcelable
 import android.os.SystemClock
-import android.os.SystemProperties
 import android.util.Log
 import android.widget.TextView
 import androidx.core.content.FileProvider
@@ -48,7 +46,6 @@ import androidx.test.uiautomator.Until
 import com.android.captiveportallogin.DownloadService.DOWNLOAD_ABORTED_REASON_FILE_TOO_LARGE
 import com.android.captiveportallogin.DownloadService.DownloadServiceBinder
 import com.android.captiveportallogin.DownloadService.ProgressCallback
-import com.android.testutils.DeviceInfoUtils
 import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.FileInputStream
@@ -68,11 +65,9 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 import kotlin.test.fail
-import org.junit.AfterClass
 import org.junit.Assert.assertNotNull
 import org.junit.Assume.assumeFalse
 import org.junit.Before
-import org.junit.BeforeClass
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -120,60 +115,6 @@ val mServiceRule = ServiceTestRule()
 @RunWith(AndroidJUnit4::class)
 @SmallTest
 class DownloadServiceTest {
-    companion object {
-        // Apply extreme logging parameters from packages/providers/MediaProvider/logging.sh
-        // This is necessary to investigate flakes where the download file gets deleted while the
-        // test is running (b/317602748).
-        private val logTags = setOf(
-            "log.tag.MediaProvider",
-            "log.tag.ModernMediaScanner",
-            "log.tag.TranscodeHelper",
-            "log.tag.FuseDaemon",
-            "log.tag.libfuse",
-            "log.tag.SQLiteQueryBuilder"
-        )
-        private const val FUSE_LOG_TAG = "persist.sys.fuse.log"
-        private val originalLogTags = mutableMapOf<String, String>()
-
-        @JvmStatic
-        @BeforeClass
-        fun setUpClass() {
-            if (!DeviceInfoUtils.isDebuggable()) return
-            logTags.forEach {
-                // There is no command to delete a property, reset to the default (INFO) if empty.
-                originalLogTags[it] = SystemProperties.get(it, "INFO")
-                setProp(it, "VERBOSE")
-            }
-            originalLogTags[FUSE_LOG_TAG] = SystemProperties.get(FUSE_LOG_TAG, "false")
-            setProp(FUSE_LOG_TAG, "true")
-            restartMediaProvider()
-        }
-
-        @JvmStatic
-        @AfterClass
-        fun tearDownClass() {
-            if (!DeviceInfoUtils.isDebuggable()) return
-            originalLogTags.forEach(this::setProp)
-            restartMediaProvider()
-        }
-
-        private fun restartMediaProvider() {
-            runShellCommand("am force-stop com.android.providers.media")
-            runShellCommand("am force-stop com.android.providers.media.module")
-            runShellCommand("am force-stop com.google.android.providers.media.module")
-        }
-
-        // Use root (su 0) to set properties, as some properties like FUSE_LOG_TAG require it
-        private fun setProp(k: String, v: String) = runShellCommand("su 0 setprop $k $v")
-
-        private fun runShellCommand(cmd: String) {
-            AutoCloseInputStream(getInstrumentation().uiAutomation.executeShellCommand(cmd)).use {
-                // Read until EOF to ensure the command completes
-                it.readBytes()
-            }
-        }
-    }
-
     private val connection = mock(HttpURLConnection::class.java)
 
     private val context by lazy { getInstrumentation().context }
