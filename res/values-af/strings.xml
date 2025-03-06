@@ -19,8 +19,8 @@
     <string name="ssl_error_unknown" msgid="3751419329218834886">"Onbekende sertifikaatfout."</string>
     <string name="ssl_security_warning_title" msgid="7912335118289529802">"Sekuriteitswaarskuwing"</string>
     <string name="ssl_error_view_certificate" msgid="3447891108083278449">"Bekyk sertifikaat"</string>
-    <string name="custom_scheme_warning" msgid="1809266150423969087">"Die netwerk waarby jy probeer aansluit, vra dat jy \'n ander program oopmaak."</string>
-    <string name="custom_scheme_example" msgid="7126568152528588592">"Byvoorbeeld, die aanmeldbladsy kan dalk \'n spesifieke program vir stawing vereis"</string>
+    <string name="custom_scheme_warning" msgid="1809266150423969087">"Die netwerk waarby jy probeer aansluit, vra dat jy \'n ander app oopmaak."</string>
+    <string name="custom_scheme_example" msgid="7126568152528588592">"Byvoorbeeld, die aanmeldbladsy kan dalk \'n spesifieke app vir stawing vereis"</string>
     <string name="ok" msgid="6584612582120777209">"OK"</string>
     <string name="page_info_address" msgid="1290683284404217554">"Adres:"</string>
     <string name="page_info" msgid="46593086046896385">"Bladsy-inligting"</string>
