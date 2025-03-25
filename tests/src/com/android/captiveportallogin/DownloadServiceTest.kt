@@ -24,6 +24,7 @@ import android.content.ServiceConnection
 import android.content.res.Configuration
 import android.net.Network
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
 import android.os.Parcel
@@ -31,6 +32,7 @@ import android.os.Parcelable
 import android.os.SystemClock
 import android.util.Log
 import android.widget.TextView
+import androidx.annotation.ChecksSdkIntAtLeast
 import androidx.core.content.FileProvider
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -46,6 +48,7 @@ import androidx.test.uiautomator.Until
 import com.android.captiveportallogin.DownloadService.DOWNLOAD_ABORTED_REASON_FILE_TOO_LARGE
 import com.android.captiveportallogin.DownloadService.DownloadServiceBinder
 import com.android.captiveportallogin.DownloadService.ProgressCallback
+import com.android.modules.utils.build.SdkLevel.isAtLeastS
 import com.android.testutils.ConnectivityDiagnosticsCollector
 import com.android.testutils.DeviceInfoUtils
 import com.android.testutils.runCommandInRootShell
@@ -131,17 +134,17 @@ class DownloadServiceTest {
         // process creation/exit
         private const val tracePath = "/sys/kernel/tracing"
         private val traceEnablePaths = listOf(
-            "$tracePath/events/f2fs/f2fs_unlink_enter",
-            "$tracePath/events/sched/sched_process_exec",
-            "$tracePath/events/sched/sched_process_fork",
-            "$tracePath/events/sched/sched_process_exit",
+            "$tracePath/events/f2fs/f2fs_unlink_enter/enable",
+            "$tracePath/events/sched/sched_process_exec/enable",
+            "$tracePath/events/sched/sched_process_fork/enable",
+            "$tracePath/events/sched/sched_process_exit/enable",
             "$tracePath/tracing_on"
         )
 
         @JvmStatic
         @BeforeClass
         fun setUpClass() {
-            if (!DeviceInfoUtils.isDebuggable()) return
+            if (!enableTracing()) return
             val originalSize = runCommandInShell("cat $tracePath/buffer_size_kb").trim()
             // Buffer size may be small on boot when tracing is disabled, and automatically expanded
             // when enabled (buffer_size_kb will report  something like: "7 (expanded: 1408)"). As
@@ -161,18 +164,21 @@ class DownloadServiceTest {
         @JvmStatic
         @AfterClass
         fun tearDownClass() {
-            if (!DeviceInfoUtils.isDebuggable()) return
+            if (!enableTracing()) return
             traceEnablePaths.asReversed().forEach {
                 runCommandInRootShell("echo 0 > $it")
             }
             runCommandInRootShell("echo $originalTraceBufferSizeKb > $tracePath/buffer_size_kb")
         }
+
+        @ChecksSdkIntAtLeast(Build.VERSION_CODES.S)
+        fun enableTracing() = DeviceInfoUtils.isDebuggable() && isAtLeastS()
     }
 
     @get:Rule
     val collectTraceOnFailureRule = object : TestWatcher() {
         override fun failed(e: Throwable, description: Description) {
-            if (!DeviceInfoUtils.isDebuggable()) return
+            if (!enableTracing()) return
             ConnectivityDiagnosticsCollector.instance?.let {
                 it.collectCommandOutput("su 0 cat $tracePath/trace")
             }
