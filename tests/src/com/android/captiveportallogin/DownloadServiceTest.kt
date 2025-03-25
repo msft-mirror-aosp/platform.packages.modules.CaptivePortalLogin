@@ -134,10 +134,10 @@ class DownloadServiceTest {
         // process creation/exit
         private const val tracePath = "/sys/kernel/tracing"
         private val traceEnablePaths = listOf(
-            "$tracePath/events/f2fs/f2fs_unlink_enter",
-            "$tracePath/events/sched/sched_process_exec",
-            "$tracePath/events/sched/sched_process_fork",
-            "$tracePath/events/sched/sched_process_exit",
+            "$tracePath/events/f2fs/f2fs_unlink_enter/enable",
+            "$tracePath/events/sched/sched_process_exec/enable",
+            "$tracePath/events/sched/sched_process_fork/enable",
+            "$tracePath/events/sched/sched_process_exit/enable",
             "$tracePath/tracing_on"
         )
 
